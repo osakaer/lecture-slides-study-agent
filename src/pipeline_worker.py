@@ -57,7 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build a study guide for one uploaded PDF.")
     parser.add_argument("pdf", help="Uploaded PDF path")
     parser.add_argument("run_dir", help="Temporary directory for this web job")
-    parser.add_argument("--questions", type=int, default=12, choices=range(10, 16))
+    parser.add_argument("--questions", type=int, default=5, choices=(5, 10, 12, 15))
     args = parser.parse_args(argv)
 
     pdf_path = Path(args.pdf)
@@ -81,27 +81,26 @@ def main(argv: list[str] | None = None) -> int:
     slides = json.loads((run_dir / "extracted.json").read_text(encoding="utf-8"))
     allocation = allocate_questions(sections, slides, args.questions)
 
-    for section in sections:
-        number = section["section"]
+    section_numbers = [section["section"] for section in sections]
+    for offset in range(0, len(section_numbers), 3):
+        group = section_numbers[offset:offset + 3]
+        start, end = group[0], group[-1]
         run_step(
-            f"Summarize section {number}/{len(sections)}",
+            f"Summarize sections {start}–{end}/{len(sections)} in one model call",
             "src/summarize.py",
             run_dir_arg,
-            str(number),
+            "--batch",
+            str(start),
+            str(end),
         )
 
-    completed = 0
-    for section_number, count in allocation.items():
-        for question_number in range(1, count + 1):
-            completed += 1
-            run_step(
-                f"Generate question {completed}/{args.questions} "
-                f"(section {section_number}, candidate {question_number})",
-                "src/questions.py",
-                run_dir_arg,
-                str(section_number),
-                str(question_number),
-            )
+    run_step(
+        f"Generate all {args.questions} questions in one model call",
+        "src/questions.py",
+        run_dir_arg,
+        "--batch-all",
+        json.dumps(allocation),
+    )
 
     run_step("Collect question candidates", "src/collect_questions.py", run_dir_arg)
     run_step("Verify questions against cited slides", "src/verify.py", run_dir_arg)

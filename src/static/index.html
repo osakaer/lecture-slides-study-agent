@@ -154,11 +154,12 @@
             <div class="form-group">
               <label class="form-label" for="questions-select">Practice questions</label>
               <select class="form-select" id="questions-select">
+                <option value="5" selected>5 questions</option>
                 <option value="10">10 questions</option>
-                <option value="12" selected>12 questions</option>
+                <option value="12">12 questions</option>
                 <option value="15">15 questions</option>
               </select>
-              <p class="hint">Choose how many questions to include.</p>
+              <p class="hint">Five questions uses fewer Gemini requests and is a good free-tier test size.</p>
             </div>
           </div>
 
@@ -169,6 +170,10 @@
           </div>
 
           <p id="form-message" class="privacy-note" role="status" hidden></p>
+          <div id="retry-panel" style="display:none; margin:12px 0;">
+            <p class="privacy-note">Your failed run is kept temporarily for up to 29 minutes. Re-enter your API key to retry with saved progress. If Gemini says your daily quota resets later, this temporary run may expire before then.</p>
+            <button class="btn btn-secondary" id="retry-btn" onclick="retryPipeline()">Retry from saved progress</button>
+          </div>
           <button class="btn btn-primary" id="start-btn" style="width:100%; margin-top:5px;" onclick="startPipeline()">
             Create my study guide <span aria-hidden="true">→</span>
           </button>
@@ -346,6 +351,7 @@
       document.getElementById('spinner').style.display = 'block';
       document.getElementById('current-step-label').textContent = 'Initializing pipeline...';
       document.getElementById('open-results-panel').style.display = 'none';
+      document.getElementById('retry-panel').style.display = 'none';
       document.getElementById('terminal').textContent = 'Starting your study guide...\\n';
 
       const formData = new FormData();
@@ -375,6 +381,49 @@
       note.hidden = false;
     }
 
+    async function retryPipeline() {
+      const apiKey = document.getElementById('api-key-input').value.trim();
+      if (!activeJobId) {
+        showMessage('This temporary job is no longer available. Upload the PDF again.');
+        return;
+      }
+      if (!apiKey) {
+        showMessage('Enter your Google AI API key again to retry this temporary run.');
+        document.getElementById('api-key-input').focus();
+        return;
+      }
+
+      const retryButton = document.getElementById('retry-btn');
+      retryButton.disabled = true;
+      document.getElementById('start-btn').disabled = true;
+      document.getElementById('spinner').style.display = 'block';
+      document.getElementById('live-status-box').style.display = 'flex';
+      document.getElementById('current-step-label').textContent = 'Retrying saved progress...';
+      document.getElementById('retry-panel').style.display = 'none';
+      document.getElementById('form-message').hidden = true;
+
+      try {
+        const body = new URLSearchParams({ job_id: activeJobId, api_key: apiKey });
+        const res = await fetch('/api/retry', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body,
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'Could not retry the guide.');
+        document.getElementById('api-key-input').value = '';
+        pollInterval = setInterval(pollJob, 1000);
+      } catch (err) {
+        document.getElementById('api-key-input').value = '';
+        document.getElementById('spinner').style.display = 'none';
+        document.getElementById('live-status-box').style.display = 'none';
+        retryButton.disabled = false;
+        document.getElementById('start-btn').disabled = false;
+        document.getElementById('retry-panel').style.display = 'block';
+        showMessage(err.message || 'Could not retry the guide. Please try again.');
+      }
+    }
+
     async function pollJob() {
       if (!activeJobId) return;
       try {
@@ -386,6 +435,7 @@
           document.getElementById('spinner').style.display = 'none';
           document.getElementById('start-btn').disabled = false;
           document.getElementById('open-results-panel').style.display = 'none';
+          document.getElementById('retry-panel').style.display = 'none';
           showMessage('This temporary job is no longer available, usually because the server restarted or its download expired. Please upload the PDF again.');
           activeJobId = null;
           currentDeckName = null;
@@ -409,6 +459,8 @@
           document.getElementById('spinner').style.display = 'none';
           document.getElementById('start-btn').disabled = false;
           showMessage('The guide could not be completed. Check the progress details for the error.');
+          document.getElementById('retry-panel').style.display = data.retry_available ? 'block' : 'none';
+          document.getElementById('retry-btn').disabled = false;
         }
       } catch (err) {
         clearInterval(pollInterval);

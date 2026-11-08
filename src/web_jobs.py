@@ -79,6 +79,7 @@ def cleanup_job(job: dict) -> None:
     if workspace:
         shutil.rmtree(workspace, ignore_errors=True)
     job["files_available"] = False
+    job["retry_available"] = False
 
 
 def cleanup_expired_jobs() -> None:
@@ -212,6 +213,9 @@ def execute_pipeline(
     job = JOBS[job_id]
     job["status"] = "running"
     job["start_time"] = time.time()
+    job["retry_available"] = False
+    job.pop("error", None)
+    job.pop("expires_at", None)
 
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
     env["GOOGLE_API_KEY"] = api_key
@@ -259,6 +263,8 @@ def execute_pipeline(
                     current_step = "Summarizing Sections"
                 elif "=== Generate question" in line_str:
                     current_step = "Generating Grounded Questions"
+                elif "=== Generate " in line_str and "questions" in line_str:
+                    current_step = "Generating Grounded Questions"
                 elif "=== Verify questions" in line_str or "=== Recheck repaired" in line_str:
                     current_step = "Multi-Modal Factual Verification"
                 elif "=== Repair unsupported" in line_str:
@@ -274,17 +280,26 @@ def execute_pipeline(
             job["current_step"] = "Finished Successfully"
             job["files_available"] = True
             job["expires_at"] = time.time() + RESULT_TTL_SECONDS
+            job.pop("failed_at", None)
             job["logs"].append("Your files are temporary and will be deleted after download or in 30 minutes.")
         else:
             job["status"] = "failed"
             job["error"] = f"Pipeline exited with error code {process.returncode}"
-            cleanup_job(job)
-            job["expires_at"] = time.time() + RESULT_TTL_SECONDS
+            job["retry_available"] = (
+                Path(job.get("pdf_path", "")).is_file()
+                and Path(job.get("run_dir", "")).is_dir()
+            )
+            failed_at = job.setdefault("failed_at", time.time())
+            job["expires_at"] = failed_at + RESULT_TTL_SECONDS
     except Exception as e:
         job["status"] = "failed"
         job["error"] = str(e)
-        cleanup_job(job)
-        job["expires_at"] = time.time() + RESULT_TTL_SECONDS
+        job["retry_available"] = (
+            Path(job.get("pdf_path", "")).is_file()
+            and Path(job.get("run_dir", "")).is_dir()
+        )
+        failed_at = job.setdefault("failed_at", time.time())
+        job["expires_at"] = failed_at + RESULT_TTL_SECONDS
     finally:
         env.pop("GOOGLE_API_KEY", None)
 

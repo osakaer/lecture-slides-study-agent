@@ -34,6 +34,16 @@ class SectionSummary(BaseModel):
     key_points: list[KeyPoint]
 
 
+class BatchedSectionSummary(SectionSummary):
+    """A section summary tagged with its section index in a batch."""
+    section_number: int = Field(ge=1)
+
+
+class SectionSummaryBatch(BaseModel):
+    """Multiple section summaries returned in one model response."""
+    sections: list[BatchedSectionSummary] = Field(min_length=1)
+
+
 # ── Question Generation Types ──────────────────────────────────────────────
 
 QuestionType = Literal["definition", "why/how", "compare", "application"]
@@ -45,6 +55,18 @@ class ExamQuestion(BaseModel):
     answer: str
     type: QuestionType
     source_slide: int
+
+
+class BatchedExamQuestion(ExamQuestion):
+    """A generated question tagged with its position and source section."""
+    question_number: int = Field(ge=1)
+    source_section: int = Field(ge=1)
+    candidate_number: int = Field(ge=1)
+
+
+class ExamQuestionBatch(BaseModel):
+    """A section's questions returned together in one model response."""
+    questions: list[BatchedExamQuestion] = Field(min_length=1)
 
 
 class CuratedQuestion(BaseModel):
@@ -85,6 +107,18 @@ class ClaimReview(BaseModel):
     """Model output payload containing all extracted claims and an explanation."""
     claims: list[ClaimAssessment] = Field(min_length=1)
     explanation: str
+
+
+class BatchedClaimReview(BaseModel):
+    """Verification outcome for one question within a verification batch."""
+    question_number: int = Field(ge=1)
+    claims: list[ClaimAssessment] = Field(min_length=1)
+    explanation: str
+
+
+class ClaimReviewBatch(BaseModel):
+    """One verifier response containing outcomes for multiple questions."""
+    results: list[BatchedClaimReview] = Field(min_length=1)
 
 
 class VerificationResult(BaseModel):

@@ -3,13 +3,191 @@ import sys
 from pathlib import Path
 from pydantic import ValidationError
 from model_provider import MODEL, generate_json
-from models import ExamQuestion, QuestionType
+from models import ExamQuestion, ExamQuestionBatch
 from evidence import evidence_score
+
+
+def generate_deck_batch(run_dir: Path, allocation: dict[int, int]) -> None:
+    sections = json.loads((run_dir / "sections.json").read_text(encoding="utf-8"))
+    slides = json.loads((run_dir / "extracted.json").read_text(encoding="utf-8"))
+    slide_lookup = {slide["slide"]: slide for slide in slides}
+    section_lookup = {section["section"]: section for section in sections}
+    assignments = []
+    for section_number, count in allocation.items():
+        section = section_lookup.get(section_number)
+        if section is None:
+            raise SystemExit(f"Invalid section number: {section_number}.")
+        ranked_slide_numbers = [
+            number for number in sorted(
+                section["slide_numbers"],
+                key=lambda number: evidence_score(slide_lookup[number]["text"]),
+                reverse=True,
+            ) if evidence_score(slide_lookup[number]["text"]) >= 0
+        ]
+        if count < 0 or count > len(ranked_slide_numbers):
+            raise SystemExit(
+                f"Section {section_number} has only {len(ranked_slide_numbers)} slides "
+                "with usable evidence for question generation."
+            )
+        for candidate_number, slide_number in enumerate(ranked_slide_numbers[:count], start=1):
+            assignments.append({
+                "question_number": len(assignments) + 1,
+                "source_section": section_number,
+                "candidate_number": candidate_number,
+                "source_slide": slide_number,
+            })
+    count = len(assignments)
+    if count == 0:
+        raise SystemExit("Question allocation is empty.")
+
+    question_dir = run_dir / "questions"
+    raw_dir = run_dir / "raw_responses"
+    question_dir.mkdir(parents=True, exist_ok=True)
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    raw_path = raw_dir / f"question_batch_{count:02}.json"
+
+    prompt_parts = [
+        f"Generate exactly {count} distinct exam-style questions in one batch. Each item's "
+        "question_number, source_section, candidate_number, and source_slide must match its "
+        "assignment block. Use only that item's evidence block; do not mix facts across blocks. "
+        "Choose definition, why/how, compare, or application as appropriate. Do not add facts "
+        "from memory, ask about unanswered exercises, or mention slide/page numbers in the "
+        "question or answer. Keep each answer to at most 2 sentences and 45 words. "
+        "Return only JSON matching the schema."
+    ]
+    image_paths = []
+    assignment_lookup = {}
+    for assignment in assignments:
+        question_number = assignment["question_number"]
+        section_number = assignment["source_section"]
+        slide_number = assignment["source_slide"]
+        slide = slide_lookup[slide_number]
+        image_path = Path(slide["image"])
+        if not image_path.exists():
+            raise SystemExit(f"Slide image not found: {image_path}")
+        assignment_lookup[question_number] = assignment
+        prompt_parts.append(
+            f"Assignment block {question_number}: question_number={question_number}, "
+            f"source_section={section_number}, candidate_number={assignment['candidate_number']}, "
+            f"source_slide={slide_number}. Use only this block for this question.\n"
+            f"Extracted slide text:\n{slide['text']}"
+        )
+        image_paths.append(image_path)
+    prompt_parts.append(
+        "The attached images follow assignment-block order. Use each image only for the "
+        "question assigned to its matching block."
+    )
+    prompt = "\n\n".join(prompt_parts)
+
+    def parse_and_save(raw_text: str):
+        batch = ExamQuestionBatch.model_validate_json(raw_text)
+        if len(batch.questions) != count:
+            raise ValueError(f"Expected {count} questions; received {len(batch.questions)}.")
+        numbers = [item.question_number for item in batch.questions]
+        if sorted(numbers) != list(range(1, count + 1)):
+            raise ValueError("question_number values must appear exactly once from 1 to the batch size.")
+        for item in batch.questions:
+            assignment = assignment_lookup[item.question_number]
+            if (
+                item.source_section != assignment["source_section"]
+                or item.candidate_number != assignment["candidate_number"]
+                or item.source_slide != assignment["source_slide"]
+            ):
+                raise ValueError(
+                    f"Question {item.question_number} must match its assigned section, "
+                    f"candidate, and slide ({assignment['source_section']}, "
+                    f"{assignment['candidate_number']}, {assignment['source_slide']})."
+                )
+
+        for item in batch.questions:
+            suffix = "" if item.candidate_number == 1 else f"_q{item.candidate_number:02}"
+            output_path = question_dir / f"section_{item.source_section:02}{suffix}.json"
+            if output_path.exists():
+                try:
+                    existing = ExamQuestion.model_validate_json(
+                        output_path.read_text(encoding="utf-8")
+                    )
+                    if existing.source_slide == item.source_slide:
+                        continue
+                except ValidationError:
+                    pass
+            output_path.write_text(
+                item.model_dump_json(
+                    indent=2,
+                    exclude={"question_number", "source_section", "candidate_number"},
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+        return batch
+
+    if raw_path.exists():
+        try:
+            batch = parse_and_save(raw_path.read_text(encoding="utf-8"))
+            print(f"Loaded cached batch of {count} questions for this deck.")
+            return
+        except (ValidationError, ValueError) as error:
+            invalid_path = raw_path.with_name(f"{raw_path.stem}.invalid{raw_path.suffix}")
+            version = 2
+            while invalid_path.exists():
+                invalid_path = raw_path.with_name(
+                    f"{raw_path.stem}.invalid_{version}{raw_path.suffix}"
+                )
+                version += 1
+            raw_path.replace(invalid_path)
+            print(f"Cached batch was invalid ({error}); preserved at {invalid_path}.")
+
+    for attempt in range(1, 3):
+        attempt_prompt = prompt
+        if attempt == 2:
+            attempt_prompt += (
+                "\n\nThe prior response was invalid. Return a complete batch with exactly "
+                f"{count} items, question_number values 1..{count}, and concise answers."
+            )
+        print(
+            f"Generating all {count} questions in one Gemini call...",
+            flush=True,
+        )
+        raw_text = generate_json(
+            attempt_prompt,
+            ExamQuestionBatch.model_json_schema(),
+            image_paths,
+        )
+        try:
+            batch = parse_and_save(raw_text)
+            raw_path.write_text(raw_text, encoding="utf-8")
+            for item in sorted(batch.questions, key=lambda value: value.question_number):
+                print(item.model_dump_json(
+                    indent=2,
+                    exclude={"question_number", "source_section", "candidate_number"},
+                    ensure_ascii=False,
+                ))
+            print(f"Saved question batch to {raw_path}")
+            return
+        except (ValidationError, ValueError) as error:
+            invalid_path = raw_path.with_name(
+                f"{raw_path.stem}.invalid_{attempt}{raw_path.suffix}"
+            )
+            invalid_path.write_text(raw_text, encoding="utf-8")
+            if attempt == 2:
+                raise SystemExit(
+                    f"Gemini returned an invalid question batch twice for section "
+                    f"{section_number}: {error}. Responses preserved at {invalid_path}."
+                ) from error
+            print(f"Invalid batch preserved at {invalid_path}: {error}", flush=True)
 
 def main(argv: list[str] | None = None) -> None:
     arguments = sys.argv if argv is None else [sys.argv[0], *argv]
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
+    if len(arguments) > 3 and arguments[2] == "--batch-all":
+        raw_allocation = json.loads(arguments[3])
+        generate_deck_batch(
+            Path(arguments[1]),
+            {int(section): int(count) for section, count in raw_allocation.items()},
+        )
+        return
 
     if len(arguments) > 1 and arguments[1].isdigit():
         run_dir = Path("data")

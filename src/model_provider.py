@@ -89,7 +89,15 @@ def _gemini_generate_json(
             if "timeout" in error_str or "timed out" in error_str:
                 raise RuntimeError(
                     "Gemini did not respond within 120 seconds. The run stopped; "
-                    "rerun with --resume after service is available."
+                    "retry from saved temporary progress if available, or start a fresh run."
+                ) from error
+            if (
+                "per day" in error_str
+                or "daily quota" in error_str
+                or "quota_exceeded" in error_str
+            ):
+                raise RuntimeError(
+                    f"Gemini daily quota is exhausted; this request will not be retried. {error}"
                 ) from error
             if any(
                 marker in error_str
@@ -98,8 +106,9 @@ def _gemini_generate_json(
                 if retry < 2:
                     import time
                     wait = 5 * (retry + 1)
+                    reason = "temporarily unavailable" if "503" in error_str else "rate limited"
                     print(
-                        f"  Gemini rate-limited (attempt {retry + 1}/3). "
+                        f"  Gemini {reason} (attempt {retry + 1}/3). "
                         f"Retrying in {wait}s...",
                         file=sys.stderr,
                         flush=True,

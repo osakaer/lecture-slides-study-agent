@@ -98,7 +98,8 @@ class StudyAgentHandler(BaseHTTPRequestHandler):
             job = self._owned_job(job_id)
             if job:
                 self._send_json({key: job.get(key) for key in (
-                    "id", "status", "current_step", "logs", "error", "deck_name", "files_available"
+                    "id", "status", "current_step", "logs", "error", "deck_name",
+                    "files_available", "retry_available"
                 )})
             else:
                 self._send_json({"status": "not_found", "logs": []}, status=HTTPStatus.NOT_FOUND)
@@ -170,6 +171,75 @@ class StudyAgentHandler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
 
+        if path == "/api/retry":
+            session_id = self._session_id()
+            if not session_id:
+                self._send_api_error(HTTPStatus.UNAUTHORIZED, "Reload the page to start a session")
+                return
+            try:
+                content_len = int(self.headers.get("Content-Length", 0))
+            except ValueError:
+                self._send_api_error(HTTPStatus.BAD_REQUEST, "Invalid Content-Length")
+                return
+            if content_len <= 0 or content_len > 8192:
+                self._send_api_error(HTTPStatus.BAD_REQUEST, "Invalid retry request")
+                return
+            try:
+                fields = urllib.parse.parse_qs(
+                    self.rfile.read(content_len).decode("utf-8"),
+                    keep_blank_values=True,
+                )
+            except UnicodeError:
+                self._send_api_error(HTTPStatus.BAD_REQUEST, "Could not read the retry request")
+                return
+
+            job_id = fields.get("job_id", [""])[0]
+            api_key = fields.get("api_key", [""])[0].strip()
+            job = self._owned_job(job_id)
+            if not job or job.get("status") != "failed" or not job.get("retry_available"):
+                self._send_api_error(HTTPStatus.NOT_FOUND, "This failed job is no longer available to retry")
+                return
+            if not api_key:
+                self._send_api_error(HTTPStatus.BAD_REQUEST, "Enter your Google AI API key to retry")
+                return
+            pdf_path = Path(job.get("pdf_path", ""))
+            run_dir = Path(job.get("run_dir", ""))
+            if not pdf_path.is_file() or not run_dir.is_dir():
+                cleanup_job(job)
+                self._send_api_error(HTTPStatus.GONE, "Temporary progress expired. Upload the PDF again.")
+                return
+
+            with JOB_LOCK:
+                active_jobs = sum(
+                    item.get("status") in {"pending", "running"}
+                    for item in JOBS.values()
+                )
+                if active_jobs >= MAX_ACTIVE_JOBS:
+                    self._send_api_error(HTTPStatus.SERVICE_UNAVAILABLE, "The server is busy. Try again shortly.")
+                    return
+                job["status"] = "pending"
+                job["current_step"] = "Retry queued"
+                job["retry_available"] = False
+                job.pop("expires_at", None)
+                job["retry_count"] = job.get("retry_count", 0) + 1
+                job["logs"].append(
+                    "Retrying from temporary progress; completed Gemini responses will be reused where available."
+                )
+                thread = threading.Thread(
+                    target=execute_pipeline,
+                    args=(job_id, pdf_path, job["question_count"], api_key),
+                    daemon=True,
+                )
+                try:
+                    thread.start()
+                except RuntimeError:
+                    job["status"] = "failed"
+                    job["retry_available"] = True
+                    self._send_api_error(HTTPStatus.SERVICE_UNAVAILABLE, "Could not start the retry")
+                    return
+            self._send_json({"job_id": job_id})
+            return
+
         if path == "/api/run":
             session_id = self._session_id()
             if not session_id:
@@ -214,12 +284,12 @@ class StudyAgentHandler(BaseHTTPRequestHandler):
                 return
 
             try:
-                questions = int(fields.get("questions", 12))
+                questions = int(fields.get("questions", 5))
             except ValueError:
                 self._send_api_error(HTTPStatus.BAD_REQUEST, "Question count must be a number")
                 return
-            if questions not in {10, 12, 15}:
-                self._send_api_error(HTTPStatus.BAD_REQUEST, "Question count must be 10, 12, or 15")
+            if questions not in {5, 10, 12, 15}:
+                self._send_api_error(HTTPStatus.BAD_REQUEST, "Question count must be 5, 10, 12, or 15")
                 return
             api_key = fields.get("api_key", "")
             if not api_key:
@@ -260,7 +330,11 @@ class StudyAgentHandler(BaseHTTPRequestHandler):
                 "deck_name": target_pdf_path.stem,
                 "workspace": str(workspace),
                 "run_dir": str(run_dir),
+                "pdf_path": str(target_pdf_path),
+                "question_count": questions,
                 "files_available": False,
+                "retry_available": False,
+                "retry_count": 0,
             }
             with JOB_LOCK:
                 active_jobs = sum(job.get("status") in {"pending", "running"} for job in JOBS.values())

@@ -8,7 +8,7 @@ Turn a lecture PDF into a study guide with topic summaries, practice questions, 
 
 - Extracts slide text and renders each PDF page so diagrams and other visual material can be considered.
 - Groups slides into topical sections and generates summaries with slide references.
-- Creates 10, 12, or 15 practice questions from the uploaded deck.
+- Creates 5, 10, 12, or 15 practice questions from the uploaded deck.
 - Checks each question against its cited slide, attempts a targeted repair for unsupported questions, and checks repaired results again.
 - Lets you browse summaries, questions, verification notes, and cited slide images in the browser.
 - Exports a printable PDF and Markdown study guide together in a ZIP download.
@@ -32,7 +32,7 @@ flowchart TD
     J <--> G
 ```
 
-The browser app starts an isolated Python worker for each upload. The worker runs the pipeline stages and writes intermediate files to a temporary job directory. Job progress and ownership are tracked in server memory.
+The browser app starts an isolated Python worker for each upload. The worker runs the pipeline stages and writes intermediate files to a temporary job directory. It summarizes up to three sections per call, generates the question set in one call, and verifies the full set in one call. Job progress and ownership are tracked in server memory.
 
 ## Deploy on Render
 
@@ -72,7 +72,7 @@ The model must be available to the user's Google AI account. Thinking level can 
 ## Use the web app
 
 1. Choose a PDF from your device.
-2. Select 10, 12, or 15 practice questions.
+2. Select 5, 10, 12, or 15 practice questions. Five questions use fewer Gemini requests and are a better fit for limited free-tier quotas.
 3. Enter your Gemini API key for this run.
 4. Start the guide and follow the progress panel.
 5. Open **Current guide** to review summaries, questions, verification notes, and cited slides.
@@ -83,7 +83,7 @@ The current upload limit is 50 MB, and the server accepts up to two active jobs 
 ## Temporary files and privacy
 
 - The PDF, rendered slide images, intermediate results, and generated guides are stored temporarily on the app server while a job runs.
-- The app removes completed job files after download or after about 29 minutes. Failed jobs are cleaned up when processing ends.
+- Completed and failed job files are temporary. Completed files are removed after download or after about 29 minutes. Failed runs keep their PDF and intermediate results for up to 29 minutes so you can retry with your API key; completed model responses are reused where possible. A daily quota reset may take longer than this temporary retry window.
 - A server restart clears in-memory job state and can interrupt active jobs or remove results before download.
 - The API key is submitted to the app over HTTPS and passed to the worker process for that run. Do not use a key you are not authorized to use.
 - Slide text and relevant slide images are sent to the Google Gemini API during generation and verification. Review Google's terms and privacy information before uploading sensitive or restricted course material.
