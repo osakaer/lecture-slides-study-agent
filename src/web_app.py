@@ -12,6 +12,7 @@ from email.parser import BytesParser
 import io
 import json
 import os
+import queue
 import re
 import secrets
 import shutil
@@ -29,8 +30,6 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
-MAX_ACTIVE_JOBS = 2
-
 # The random browser cookie scopes temporary jobs without creating user accounts.
 from web_jobs import (
     JOBS,
@@ -39,7 +38,7 @@ from web_jobs import (
     cleanup_expired_jobs,
     cleanup_job,
     cleanup_loop,
-    execute_pipeline,
+    enqueue_pipeline,
     get_available_decks,
     load_deck_details,
 )
@@ -210,33 +209,39 @@ class StudyAgentHandler(BaseHTTPRequestHandler):
                 return
 
             with JOB_LOCK:
-                active_jobs = sum(
-                    item.get("status") in {"pending", "running"}
-                    for item in JOBS.values()
-                )
-                if active_jobs >= MAX_ACTIVE_JOBS:
-                    self._send_api_error(HTTPStatus.SERVICE_UNAVAILABLE, "The server is busy. Try again shortly.")
-                    return
+                previous_step = job.get("current_step")
+                previous_expires_at = job.get("expires_at")
+                previous_retry_count = job.get("retry_count", 0)
                 job["status"] = "pending"
                 job["current_step"] = "Retry queued"
                 job["retry_available"] = False
                 job.pop("expires_at", None)
-                job["retry_count"] = job.get("retry_count", 0) + 1
-                job["logs"].append(
-                    "Retrying from temporary progress; completed Gemini responses will be reused where available."
-                )
-                thread = threading.Thread(
-                    target=execute_pipeline,
-                    args=(job_id, pdf_path, job["question_count"], api_key),
-                    daemon=True,
-                )
                 try:
-                    thread.start()
+                    enqueue_pipeline(job_id, pdf_path, job["question_count"], api_key)
+                except queue.Full:
+                    job["status"] = "failed"
+                    job["current_step"] = previous_step
+                    job["retry_available"] = True
+                    job["retry_count"] = previous_retry_count
+                    if previous_expires_at is not None:
+                        job["expires_at"] = previous_expires_at
+                    self._send_api_error(
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                        "The waiting queue is full. Wait for a guide to finish, then retry.",
+                    )
+                    return
                 except RuntimeError:
                     job["status"] = "failed"
                     job["retry_available"] = True
+                    job["retry_count"] = previous_retry_count
+                    if previous_expires_at is not None:
+                        job["expires_at"] = previous_expires_at
                     self._send_api_error(HTTPStatus.SERVICE_UNAVAILABLE, "Could not start the retry")
                     return
+                job["retry_count"] = previous_retry_count + 1
+                job["logs"].append(
+                    "Retrying from temporary progress; completed Gemini responses will be reused where available."
+                )
             self._send_json({"job_id": job_id})
             return
 
@@ -325,8 +330,8 @@ class StudyAgentHandler(BaseHTTPRequestHandler):
                 # Every job endpoint checks this owner before exposing its files or status.
                 "session_id": session_id,
                 "status": "pending",
-                "current_step": "Queued",
-                "logs": [],
+                "current_step": "Waiting in queue",
+                "logs": ["Your guide is queued and will start when the current guide finishes."],
                 "deck_name": target_pdf_path.stem,
                 "workspace": str(workspace),
                 "run_dir": str(run_dir),
@@ -337,19 +342,17 @@ class StudyAgentHandler(BaseHTTPRequestHandler):
                 "retry_count": 0,
             }
             with JOB_LOCK:
-                active_jobs = sum(job.get("status") in {"pending", "running"} for job in JOBS.values())
-                if active_jobs >= MAX_ACTIVE_JOBS:
-                    shutil.rmtree(workspace, ignore_errors=True)
-                    self._send_api_error(HTTPStatus.SERVICE_UNAVAILABLE, "The server is busy. Try again shortly.")
-                    return
                 JOBS[job_id] = job_record
-                thread = threading.Thread(
-                    target=execute_pipeline,
-                    args=(job_id, target_pdf_path, questions, api_key),
-                    daemon=True,
-                )
                 try:
-                    thread.start()
+                    enqueue_pipeline(job_id, target_pdf_path, questions, api_key)
+                except queue.Full:
+                    JOBS.pop(job_id, None)
+                    shutil.rmtree(workspace, ignore_errors=True)
+                    self._send_api_error(
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                        "The waiting queue is full. Wait for a guide to finish, then try again.",
+                    )
+                    return
                 except RuntimeError:
                     JOBS.pop(job_id, None)
                     shutil.rmtree(workspace, ignore_errors=True)

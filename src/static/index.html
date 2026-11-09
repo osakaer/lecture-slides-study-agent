@@ -352,7 +352,7 @@
       document.getElementById('current-step-label').textContent = 'Initializing pipeline...';
       document.getElementById('open-results-panel').style.display = 'none';
       document.getElementById('retry-panel').style.display = 'none';
-      document.getElementById('terminal').textContent = 'Starting your study guide...\\n';
+      document.getElementById('terminal').textContent = 'Starting your study guide...\n';
 
       const formData = new FormData();
       formData.append('questions', questions);
@@ -444,7 +444,7 @@
 
         document.getElementById('current-step-label').textContent = data.current_step || data.status;
         const terminal = document.getElementById('terminal');
-        terminal.textContent = data.logs.join('\\n');
+        terminal.textContent = data.logs.join('\n');
         terminal.scrollTop = terminal.scrollHeight;
 
         if (data.status === 'completed') {

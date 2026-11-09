@@ -7,6 +7,7 @@ No database or durable file storage is used; restarting the server clears jobs.
 import atexit
 import json
 import os
+import queue
 import shutil
 import subprocess
 import sys
@@ -19,6 +20,9 @@ from uuid import uuid4
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 RESULT_TTL_SECONDS = 29 * 60
 JOB_LOCK = threading.Lock()
+JOB_QUEUE: queue.Queue[tuple[str, Path, int, str]] = queue.Queue(maxsize=2)
+JOB_QUEUE_THREAD: threading.Thread | None = None
+JOB_QUEUE_THREAD_LOCK = threading.Lock()
 
 
 def process_is_running(pid: int) -> bool:
@@ -111,6 +115,48 @@ def cleanup_all_jobs() -> None:
 
 
 atexit.register(cleanup_all_jobs)
+
+
+def _job_queue_loop() -> None:
+    """Run one pipeline at a time and keep a small in-memory waiting queue."""
+    while True:
+        job_id, pdf_path, questions, api_key = JOB_QUEUE.get()
+        try:
+            execute_pipeline(job_id, pdf_path, questions, api_key)
+        except Exception as error:
+            with JOB_LOCK:
+                job = JOBS.get(job_id)
+                if job and job.get("status") in {"pending", "running"}:
+                    job["status"] = "failed"
+                    job["current_step"] = "Pipeline failed"
+                    job["error"] = str(error)
+                    job["retry_available"] = (
+                        Path(job.get("pdf_path", "")).is_file()
+                        and Path(job.get("run_dir", "")).is_dir()
+                    )
+                    job["failed_at"] = time.time()
+                    job["expires_at"] = job["failed_at"] + RESULT_TTL_SECONDS
+                    job["logs"].append(f"Pipeline worker error: {error}")
+        finally:
+            # Drop the queued reference to the user's key as soon as its run ends.
+            api_key = ""
+            JOB_QUEUE.task_done()
+
+
+def enqueue_pipeline(
+    job_id: str, pdf_path: Path, questions: int, api_key: str
+) -> None:
+    """Queue a job, starting the single worker on demand."""
+    global JOB_QUEUE_THREAD
+    with JOB_QUEUE_THREAD_LOCK:
+        if JOB_QUEUE_THREAD is None or not JOB_QUEUE_THREAD.is_alive():
+            JOB_QUEUE_THREAD = threading.Thread(
+                target=_job_queue_loop,
+                name="study-guide-worker",
+                daemon=True,
+            )
+            JOB_QUEUE_THREAD.start()
+    JOB_QUEUE.put_nowait((job_id, pdf_path, questions, api_key))
 
 
 def get_available_decks(session_id: str) -> list[dict]:
@@ -210,12 +256,16 @@ def load_deck_details(job_id: str, session_id: str) -> dict | None:
 def execute_pipeline(
     job_id: str, pdf_path: Path, questions: int, api_key: str
 ) -> None:
-    job = JOBS[job_id]
-    job["status"] = "running"
-    job["start_time"] = time.time()
-    job["retry_available"] = False
-    job.pop("error", None)
-    job.pop("expires_at", None)
+    with JOB_LOCK:
+        job = JOBS.get(job_id)
+        if not job or job.get("status") != "pending":
+            return
+        job["status"] = "running"
+        job["current_step"] = "Starting pipeline"
+        job["start_time"] = time.time()
+        job["retry_available"] = False
+        job.pop("error", None)
+        job.pop("expires_at", None)
 
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
     env["GOOGLE_API_KEY"] = api_key
