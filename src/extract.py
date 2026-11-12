@@ -1,8 +1,35 @@
+from collections import Counter
 import json
 import sys
 from pathlib import Path
 
 import pymupdf
+
+
+def strip_repeated_lines(
+    slides: list[dict], threshold: float = 0.3, min_slides: int = 8
+) -> set[str]:
+    """Remove lines repeated across many slides, such as headers and footers."""
+    if len(slides) < min_slides:
+        return set()
+
+    counts: Counter[str] = Counter()
+    for slide in slides:
+        counts.update({
+            line.strip()
+            for line in slide["text"].splitlines()
+            if line.strip()
+        })
+
+    limit = max(3, int(len(slides) * threshold))
+    repeated = {line for line, count in counts.items() if count >= limit}
+    for slide in slides:
+        kept = [
+            line for line in slide["text"].splitlines()
+            if line.strip() not in repeated
+        ]
+        slide["text"] = "\n".join(kept).strip()
+    return repeated
 
 def main(argv: list[str] | None = None) -> None:
     arguments = sys.argv if argv is None else [sys.argv[0], *argv]
@@ -35,6 +62,10 @@ def main(argv: list[str] | None = None) -> None:
             })
             if len(text) < 20:
                 print(f"Note: slide {page_number} has little or no extractable text.")
+
+    removed = strip_repeated_lines(slides)
+    if removed:
+        print(f"Removed repeated header/footer lines: {sorted(removed)[:10]}")
 
     Path(deck_dir / "extracted.json").write_text(
         json.dumps(slides, ensure_ascii=False, indent=2),

@@ -1,9 +1,10 @@
-"""Internal worker that builds a study guide for a web job."""
+"""Run the study-guide pipeline for one uploaded PDF."""
 
 import argparse
 import importlib
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -13,7 +14,7 @@ from evidence import evidence_score
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 
 if hasattr(sys.stdout, "reconfigure"):
-    # The web server reads worker output as live job progress.
+    # Streamlit reads worker output to show live progress.
     sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 
 
@@ -26,15 +27,24 @@ def allocate_questions(sections: list[dict], slides: list[dict], target: int) ->
         )
         for section in sections
     }
-    if sum(capacities.values()) < target:
+    total = sum(capacities.values())
+    if total < target:
         raise SystemExit(
-            f"This deck has only {sum(capacities.values())} usable slides for "
+            f"This deck has only {total} usable slides for "
             f"question generation; reduce the question count below {target}."
         )
 
     allocation = {number: 0 for number in capacities}
+    usable = [number for number, capacity in capacities.items() if capacity > 0]
+
+    if target <= len(usable):
+        step = len(usable) / target
+        for index in range(target):
+            allocation[usable[int(index * step)]] += 1
+        return allocation
+
     while sum(allocation.values()) < target:
-        for section_number in allocation:
+        for section_number in usable:
             if allocation[section_number] < capacities[section_number]:
                 allocation[section_number] += 1
                 if sum(allocation.values()) == target:
@@ -56,7 +66,7 @@ def run_step(label: str, *args: str) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build a study guide for one uploaded PDF.")
     parser.add_argument("pdf", help="Uploaded PDF path")
-    parser.add_argument("run_dir", help="Temporary directory for this web job")
+    parser.add_argument("run_dir", help="Temporary directory for this guide run")
     parser.add_argument("--questions", type=int, default=5, choices=(5, 10, 12, 15))
     args = parser.parse_args(argv)
 
@@ -82,28 +92,34 @@ def main(argv: list[str] | None = None) -> int:
     allocation = allocate_questions(sections, slides, args.questions)
 
     section_numbers = [section["section"] for section in sections]
-    for offset in range(0, len(section_numbers), 3):
-        group = section_numbers[offset:offset + 3]
-        start, end = group[0], group[-1]
+    for section_number in section_numbers:
         run_step(
-            f"Summarize sections {start}–{end}/{len(sections)} in one model call",
+            f"Summarize section {section_number}/{len(sections)}",
             "src/summarize.py",
             run_dir_arg,
-            "--batch",
-            str(start),
-            str(end),
+            str(section_number),
         )
 
-    run_step(
-        f"Generate all {args.questions} questions in one model call",
-        "src/questions.py",
-        run_dir_arg,
-        "--batch-all",
-        json.dumps(allocation),
-    )
+    question_number = 0
+    for section_number, count in allocation.items():
+        for candidate_number in range(1, count + 1):
+            question_number += 1
+            run_step(
+                f"Generate question {question_number}/{args.questions} from section {section_number}",
+                "src/questions.py",
+                run_dir_arg,
+                str(section_number),
+                str(candidate_number),
+            )
 
     run_step("Collect question candidates", "src/collect_questions.py", run_dir_arg)
     run_step("Verify questions against cited slides", "src/verify.py", run_dir_arg)
+    questions_dir = run_dir / "questions"
+    for name in ("curated_set", "verification"):
+        source = questions_dir / f"{name}.json"
+        snapshot = questions_dir / f"{name}.pre_repair.json"
+        if source.exists() and not snapshot.exists():
+            shutil.copy2(source, snapshot)
     run_step("Repair unsupported questions", "src/repair_questions.py", run_dir_arg)
     run_step("Recheck repaired questions", "src/verify.py", run_dir_arg)
     run_step("Export the study guide", "src/export.py", run_dir_arg)

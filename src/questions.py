@@ -145,7 +145,7 @@ def generate_deck_batch(run_dir: Path, allocation: dict[int, int]) -> None:
                 f"{count} items, question_number values 1..{count}, and concise answers."
             )
         print(
-            f"Generating all {count} questions in one Gemini call...",
+            f"Generating all {count} questions in one local model call...",
             flush=True,
         )
         raw_text = generate_json(
@@ -171,8 +171,8 @@ def generate_deck_batch(run_dir: Path, allocation: dict[int, int]) -> None:
             invalid_path.write_text(raw_text, encoding="utf-8")
             if attempt == 2:
                 raise SystemExit(
-                    f"Gemini returned an invalid question batch twice for section "
-                    f"{section_number}: {error}. Responses preserved at {invalid_path}."
+                    f"The local model returned an invalid question batch twice: {error}. "
+                    f"Responses preserved at {invalid_path}."
                 ) from error
             print(f"Invalid batch preserved at {invalid_path}: {error}", flush=True)
 
@@ -207,8 +207,7 @@ def main(argv: list[str] | None = None) -> None:
     slide_lookup = {slide["slide"]: slide for slide in slides}
 
 
-    # Give each generated question a distinct, evidence-rich slide. Restricting the
-    # model to one slide also prevents it from mixing details across a six-slide batch.
+    # Give each question one evidence-rich slide to avoid mixing details across slides.
     if question_number < 1:
         raise SystemExit("Question number must be 1 or greater.")
 
@@ -326,7 +325,7 @@ def main(argv: list[str] | None = None) -> None:
     image_paths = [image_path]
     print(
         f"Generating question {question_number} for section {section_number} "
-        f"from slide {target_slide_number} with Gemini {MODEL}...",
+        f"from slide {target_slide_number} with local model {MODEL}...",
         flush=True,
     )
     generation_prompt = "\n\n".join(prompt_parts)

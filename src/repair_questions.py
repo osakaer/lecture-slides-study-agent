@@ -194,7 +194,7 @@ def main(argv: list[str] | None = None) -> None:
                     print(f"Invalid or identical repair response preserved at {invalid_path}: {error}", flush=True)
 
         if repaired is None:
-            # Log that no change could be generated so manual review is flagged
+            # Record the failed repair so the question can be reviewed manually.
             repair_log["repairs"].append({
                 "question_index": index,
                 "source_section": section_number,

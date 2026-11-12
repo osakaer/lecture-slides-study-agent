@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 from pydantic import ValidationError
@@ -7,8 +8,9 @@ from model_provider import MODEL, generate_json, provider_info
 from models import (
     ClaimAssessment,
     ClaimReview,
-    ClaimReviewBatch,
 )
+
+VERIFIER_MODEL = (os.getenv("VERIFIER_MODEL") or "").strip() or MODEL
 
 def main(argv: list[str] | None = None) -> None:
     arguments = sys.argv if argv is None else [sys.argv[0], *argv]
@@ -49,9 +51,15 @@ def main(argv: list[str] | None = None) -> None:
             counts[result["verification"]["supported"]] += 1
 
         output = {
-            "verifier": provider_info(),
+            "verifier": active_provider,
             "question_count": len(question_set["questions"]),
             "counts": counts,
+            "contradicted_claims": sum(
+                1
+                for result in saved_results
+                for claim in result["verification"]["claims"]
+                if claim["status"] == "contradicted"
+            ),
             "results": saved_results,
         }
         output_path.write_text(
@@ -64,6 +72,8 @@ def main(argv: list[str] | None = None) -> None:
         statuses = {claim.status for claim in claims}
         if statuses == {"supported"}:
             return "yes"
+        if "contradicted" in statuses:
+            return "no"
         if "supported" in statuses or "unclear" in statuses:
             return "partial"
         return "no"
@@ -78,7 +88,7 @@ def main(argv: list[str] | None = None) -> None:
         return candidate
 
 
-    active_provider = provider_info()
+    active_provider = provider_info(VERIFIER_MODEL)
     questions = question_set["questions"]
     results = [None] * len(questions)
     pending = []
@@ -104,8 +114,8 @@ def main(argv: list[str] | None = None) -> None:
                 "slide_text": slide["text"],
                 "verification_hint": question.get("verification_hint"),
                 "provider": active_provider["provider"],
-                "model": MODEL,
-                "claim_review_version": 3,
+                "model": VERIFIER_MODEL,
+                "claim_review_version": 4,
             },
             sort_keys=True,
             ensure_ascii=False,
@@ -165,133 +175,82 @@ def main(argv: list[str] | None = None) -> None:
                 "verification": verification,
             }
 
-    if pending:
-        slide_numbers = list(dict.fromkeys(item["question"]["source_slide"] for item in pending))
-        image_paths = []
-        for slide_number in slide_numbers:
-            image_path = Path(slide_lookup[slide_number]["image"])
-            image_paths.append(image_path)
-
-        prompt_parts = [
-            "Audit each numbered question and answer independently against only its cited slide. "
-            "For every answer, split each directly asserted factual statement into the smallest "
-            "independently checkable claims. Do not invent, synthesize, or extrapolate claims. "
-            "Include factual premises in the question that its answer depends on. Use only the "
-            "text and matching image for that question; do not use outside knowledge or evidence "
-            "from another question's slide. Use supported only when directly supported, "
-            "contradicted when the slide conflicts, unsupported when absent, and unclear when "
-            "ambiguous. For diagrams, cite visible labels or relationships. Do not treat an "
-            "unanswered exercise as evidence. Keep claims, evidence, and explanations concise. "
-            "Return exactly one result for every question_number provided, with no duplicates."
-        ]
-        for item in pending:
-            question = item["question"]
-            slide = item["slide"]
-            prompt_parts.append(
-                f"Question number: {item['index']}\n"
-                f"Cited PDF slide: {question['source_slide']}\n"
-                f"Question: {question['question']}\n"
-                f"Answer: {question['answer']}\n"
-                f"Extracted slide text:\n{slide['text']}"
-                + (f"\nReview focus: {question['verification_hint']}"
-                   if question.get("verification_hint") else "")
-            )
-        prompt_parts.append(
-            "Attached slide images are ordered by these PDF slide numbers: "
-            + ", ".join(str(number) for number in slide_numbers)
-            + ". Use the image with the same cited slide number as each question."
+    for entry in pending:
+        index = entry["index"]
+        question = entry["question"]
+        slide_number = question["source_slide"]
+        slide = entry["slide"]
+        prompt = (
+            "Audit this question and answer against only its cited slide. For every answer, "
+            "split each directly asserted factual statement into the smallest independently "
+            "checkable claims. Include factual premises in the question that its answer "
+            "depends on. Do not use outside knowledge or infer unsupported details. Use "
+            "supported only when directly supported, contradicted when the slide conflicts, "
+            "unsupported when absent, and unclear when ambiguous. For diagrams, cite visible "
+            "labels or relationships. Do not treat an unanswered exercise as evidence. Keep "
+            "claims, evidence, and explanation concise. Return JSON matching the schema.\n\n"
+            f"Cited PDF slide: {slide_number}\n"
+            f"Question: {question['question']}\n"
+            f"Answer: {question['answer']}\n"
+            f"Extracted slide text:\n{slide['text']}"
+            + (f"\nReview focus: {question['verification_hint']}"
+               if question.get("verification_hint") else "")
         )
-        prompt = "\n\n".join(prompt_parts)
-        batch_key = hashlib.sha256(
-            "|".join(item["fingerprint"] for item in pending).encode("ascii")
-        ).hexdigest()[:16]
-        batch_path = raw_dir / f"verification_batch_{batch_key}.json"
-
-        def parse_batch(raw_text: str) -> ClaimReviewBatch:
-            batch = ClaimReviewBatch.model_validate_json(raw_text)
-            expected = {item["index"] for item in pending}
-            found = [item.question_number for item in batch.results]
-            if set(found) != expected or len(found) != len(expected):
-                raise ValueError("Verification batch must return each pending question number exactly once.")
-            return batch
-
-        batch = None
+        image_path = Path(slide["image"])
+        review = None
         raw_text = ""
-        if batch_path.exists():
-            raw_text = batch_path.read_text(encoding="utf-8")
-            try:
-                batch = parse_batch(raw_text)
-                print(f"Loaded cached verification batch for {len(pending)} questions.")
-            except (ValidationError, ValueError) as error:
-                invalid_path = next_invalid_path(batch_path)
-                invalid_path.write_text(raw_text, encoding="utf-8")
-                batch_path.unlink()
-                print(f"Moved invalid verification batch to {invalid_path}: {error}")
-
-        if batch is None:
-            for attempt in range(1, 3):
-                attempt_prompt = prompt
-                if attempt == 2:
-                    attempt_prompt += (
-                        "\n\nThe prior batch was incomplete or invalid. Return a complete JSON "
-                        "object containing each requested question_number exactly once."
-                    )
-                print(
-                    f"Checking {len(pending)} questions against their cited slides in one Gemini call...",
-                    flush=True,
-                )
-                try:
-                    raw_text = generate_json(
-                        attempt_prompt,
-                        ClaimReviewBatch.model_json_schema(),
-                        image_paths,
-                    )
-                except RuntimeError as error:
-                    raise SystemExit(f"Model call failed while verifying question batch: {error}") from error
-                try:
-                    batch = parse_batch(raw_text)
-                    batch_path.write_text(raw_text, encoding="utf-8")
-                    break
-                except (ValidationError, ValueError) as error:
-                    invalid_path = batch_path.with_name(
-                        f"{batch_path.stem}.invalid_{attempt}{batch_path.suffix}"
-                    )
-                    invalid_path.write_text(raw_text, encoding="utf-8")
-                    if attempt == 2:
-                        raise SystemExit(
-                            f"Gemini returned an invalid verification batch twice; "
-                            f"responses preserved at {invalid_path}: {error}"
-                        ) from error
-                    print(f"Invalid verification batch preserved at {invalid_path}: {error}")
-
-        review_by_number = {item.question_number: item for item in batch.results}
-        for entry in pending:
-            index = entry["index"]
-            question = entry["question"]
-            slide_number = question["source_slide"]
-            review = review_by_number[index]
-            entry["raw_path"].write_text(
-                ClaimReview(claims=review.claims, explanation=review.explanation).model_dump_json(
-                    indent=2, ensure_ascii=False
-                ),
-                encoding="utf-8",
+        for attempt in range(1, 3):
+            attempt_prompt = prompt
+            if attempt == 2:
+                attempt_prompt += "\n\nReturn one complete JSON object matching the schema."
+            print(
+                f"Checking question {index}/{len(questions)} against slide {slide_number} "
+                "with the local model...",
+                flush=True,
             )
-            verification = {
-                "supported": aggregate_status(review.claims),
-                "explanation": review.explanation,
-                "claims": [claim.model_dump() for claim in review.claims],
-            }
-            results[index - 1] = {
-                "source_section": question.get("source_section"),
-                "question": question["question"],
-                "answer": question["answer"],
-                "type": question["type"],
-                "source_slide": slide_number,
-                "input_fingerprint": entry["fingerprint"],
-                "verification": verification,
-            }
-            print(f"Question {index}: {verification['supported']} — {verification['explanation']}")
-            save_results()
+            try:
+                raw_text = generate_json(
+                    attempt_prompt,
+                    ClaimReview.model_json_schema(),
+                    [image_path],
+                    model=VERIFIER_MODEL,
+                )
+            except RuntimeError as error:
+                raise SystemExit(f"Local model call failed while verifying question {index}: {error}") from error
+            try:
+                review = ClaimReview.model_validate_json(raw_text)
+                entry["raw_path"].write_text(raw_text, encoding="utf-8")
+                break
+            except ValidationError as error:
+                invalid_path = entry["raw_path"].with_name(
+                    f"{entry['raw_path'].stem}.invalid_{attempt}{entry['raw_path'].suffix}"
+                )
+                invalid_path.write_text(raw_text, encoding="utf-8")
+                if attempt == 2:
+                    raise SystemExit(
+                        f"Local model returned invalid verification JSON twice for question "
+                        f"{index}; responses preserved at {invalid_path}: {error}"
+                    ) from error
+                print(f"Invalid verification response preserved at {invalid_path}: {error}")
+
+        if review is None:
+            raise SystemExit(f"Local model did not produce a verification result for question {index}.")
+        verification = {
+            "supported": aggregate_status(review.claims),
+            "explanation": review.explanation,
+            "claims": [claim.model_dump() for claim in review.claims],
+        }
+        results[index - 1] = {
+            "source_section": question.get("source_section"),
+            "question": question["question"],
+            "answer": question["answer"],
+            "type": question["type"],
+            "source_slide": slide_number,
+            "input_fingerprint": entry["fingerprint"],
+            "verification": verification,
+        }
+        print(f"Question {index}: {verification['supported']} — {verification['explanation']}")
+        save_results()
 
     save_results()
     saved_output = json.loads(output_path.read_text(encoding="utf-8"))

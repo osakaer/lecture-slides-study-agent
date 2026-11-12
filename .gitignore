@@ -18,6 +18,10 @@ __pycache__/
 # Local data & runs
 data/
 tmp/
+eval/decks/
+eval/key.csv
+eval/ratings.csv
+eval/run_manifest.json
 
 # IDE & Editor settings
 .vscode/

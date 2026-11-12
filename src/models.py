@@ -1,13 +1,9 @@
-"""Domain models and schemas for the Lecture Slides Study Agent.
-
-Centralizes all Pydantic models for slides, section chunking, summaries,
-questions, factual verification, and repair pipelines.
-"""
+"""Pydantic schemas for slide extraction, summaries, questions, and review."""
 
 from typing import Literal
 from pydantic import BaseModel, Field
 
-# ── Slide & Section Types ──────────────────────────────────────────────────
+# Slide and section types
 
 class Slide(BaseModel):
     """Extracted text and visual rendering metadata for a single slide."""
@@ -44,7 +40,7 @@ class SectionSummaryBatch(BaseModel):
     sections: list[BatchedSectionSummary] = Field(min_length=1)
 
 
-# ── Question Generation Types ──────────────────────────────────────────────
+# Question generation types
 
 QuestionType = Literal["definition", "why/how", "compare", "application"]
 
@@ -88,7 +84,7 @@ class CuratedQuestionSet(BaseModel):
     questions: list[CuratedQuestion]
 
 
-# ── Verification Types ─────────────────────────────────────────────────────
+# Verification types
 
 ClaimStatus = Literal["supported", "unsupported", "contradicted", "unclear"]
 ClaimSource = Literal["question", "answer"]
@@ -146,14 +142,18 @@ class VerificationSet(BaseModel):
     results: list[QuestionVerification] = Field(default_factory=list)
 
 
-# ── Repair Types ───────────────────────────────────────────────────────────
+# Repair types
 
-RepairStatus = Literal["repaired", "unchanged", "failed"]
+RepairStatus = Literal[
+    "repaired", "unchanged", "failed", "unmodified_manual_review"
+]
 
 
 class RepairItem(BaseModel):
     """Audit record of an automated question repair attempt."""
     question_index: int
+    source_section: int | None = None
+    candidate_number: int | None = None
     original_question: str
     repaired_question: str
     original_answer: str
@@ -161,13 +161,13 @@ class RepairItem(BaseModel):
     source_slide: int
     status: RepairStatus
     reason: str | None = None
+    first_audit: dict | None = None
+    repair_response: str | None = None
 
 
 class RepairLog(BaseModel):
     """Log of all repairs performed on a question set."""
     repairs: list[RepairItem] = Field(default_factory=list)
 
-
-# ── Job Types ──────────────────────────────────────────────────────────────
 
 JobStatus = Literal["pending", "running", "completed", "failed"]

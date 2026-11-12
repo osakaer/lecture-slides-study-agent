@@ -26,14 +26,7 @@ def main(argv: list[str] | None = None) -> None:
         lines = [l.strip() for l in slide.get("text", "").splitlines() if l.strip()]
         cleaned = []
         for line in lines:
-            # Skip generic metadata, textbook headers, course codes, copyright
-            if re.search(
-                r"^(CS\s*\d+|database system concepts|copyright|©|silberschatz|korth|sudarshan|\d+\.\d+|\d+)$",
-                line,
-                re.I,
-            ):
-                continue
-            if re.search(r"silberschatz,\s*korth|see\s+www\.db-book\.com", line, re.I):
+            if re.search(r"^(copyright|©|\d+\.\d+|\d+)$", line, re.I):
                 continue
             cleaned.append(line)
         return cleaned[0] if cleaned else "Untitled Slide"
@@ -41,24 +34,24 @@ def main(argv: list[str] | None = None) -> None:
 
     def is_major_boundary(title: str, prev_title: str) -> bool:
         """Check if the slide marks a natural section or topic change."""
-        # Continuations should never be boundaries
+        # Continuations should not create section boundaries.
         if re.search(r"\(cont|\bcontinued\b|part\s*2\b", title, re.I):
             return False
-        # Explicit topic or chapter headings
+        # Treat explicit topic and chapter headings as boundaries.
         if re.search(
             r"^(topic\s*\d+|chapter\s*\d+|part\s*\d+|section\s*\d+|att-\d+|content\b|outline\b|agenda\b)",
             title,
             re.I,
         ):
             return True
-        # Major architectural or conceptual transitions
+        # Treat major conceptual transitions as boundaries.
         if re.search(
-            r"^(solution:|introduction to|overview\b|review\b|applications?\b|standards?\b|hash functions\b|block ciphers\b|public key\b|relational\b)",
+            r"^(solution:|introduction to|overview\b|review\b|summary\b)",
             title,
             re.I,
         ):
             return True
-        # Significant normalized prefix change
+        # Split when the normalized title prefixes differ.
         t1_norm = re.sub(r"[^a-z0-9]", "", title.lower())[:8]
         t2_norm = re.sub(r"[^a-z0-9]", "", prev_title.lower())[:8]
         return t1_norm != t2_norm
@@ -96,7 +89,7 @@ def main(argv: list[str] | None = None) -> None:
             title = extract_title(slides[i])
             prev_title = extract_title(slides[i - 1])
 
-            # Only split if boundary detected and remaining slides can form a valid section
+            # Split only when a boundary leaves enough slides for another section.
             if is_major_boundary(title, prev_title) and remaining >= min_s:
                 splits.append(i)
                 i += min_s

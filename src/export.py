@@ -28,7 +28,7 @@ def main(argv: list[str] | None = None) -> None:
         else {"repairs": []}
     )
 
-    # Map repaired questions by (section, slide) or index
+    # Index repair details by question number for the exported guide.
     repairs_by_index = {
         item["question_index"]: item
         for item in repair_log.get("repairs", [])

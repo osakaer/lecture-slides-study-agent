@@ -86,7 +86,7 @@ def summarize_batch(run_dir: Path, section_numbers: list[int]) -> None:
                 "and cite only slide numbers belonging to each section."
             )
         print(
-            f"Summarizing {len(pending)} sections in one Gemini {MODEL} call...",
+            f"Summarizing {len(pending)} sections in one local model {MODEL} call...",
             flush=True,
         )
         raw_text = generate_json(
@@ -114,7 +114,7 @@ def summarize_batch(run_dir: Path, section_numbers: list[int]) -> None:
             invalid_path.write_text(raw_text, encoding="utf-8")
             if attempt == 2:
                 raise SystemExit(
-                    f"Gemini returned an invalid summary batch twice: {error}. "
+                    f"The local model returned an invalid summary batch twice: {error}. "
                     f"Responses preserved at {invalid_path}."
                 ) from error
             print(f"Invalid summary batch preserved at {invalid_path}: {error}", flush=True)
@@ -187,14 +187,14 @@ def main(argv: list[str] | None = None) -> None:
         image_paths.append(image_path)
 
     prompt_parts.append("The attached slide images are in the same order as the slide text blocks above.")
-    print(f"Summarizing section {section_number} with Gemini {MODEL}...", flush=True)
+    print(f"Summarizing section {section_number} with local model {MODEL}...", flush=True)
     raw_text = generate_json(
         "\n\n".join(prompt_parts),
         SectionSummary.model_json_schema(),
         image_paths,
     )
 
-    # Save the raw response before parsing
+    # Save the raw response before parsing it.
     raw_path.write_text(raw_text, encoding="utf-8")
 
     summary = SectionSummary.model_validate_json(raw_text)

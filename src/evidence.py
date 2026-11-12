@@ -13,11 +13,20 @@ def evidence_score(text: str) -> int:
         line = line.strip()
         if not line:
             continue
-        if re.search(r"copyright|database system concepts|7th edition", line, re.I):
+        if re.search(r"copyright", line, re.I):
             continue
         if re.fullmatch(r"\d+\.\d+", line):
             continue
         useful_lines.append(line)
 
+    if not useful_lines:
+        return -1
+    if re.match(
+        r"^(outline|agenda|contents|table of contents|references|thank you|questions?)(?:\b|\?)",
+        useful_lines[0],
+        re.I,
+    ):
+        return -1
+
     score = sum(len(re.findall(r"\w+", line)) for line in useful_lines)
-    return score if score >= 3 else -1
+    return min(score, 80) if score >= 3 else -1

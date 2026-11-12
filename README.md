@@ -1,160 +1,213 @@
 # Lecture Slides Study Agent
 
-Turn a lecture PDF into a study guide with topic summaries, practice questions, cited slides, and a printable PDF. The web app accepts a Google Gemini API key for each run and keeps uploaded files and generated results temporary.
+A local study-guide generator that turns lecture-slide PDFs into topic summaries, practice questions, and a printable guide. It uses a Streamlit dashboard and a vision-capable Ollama model to read both slide text and visual content.
 
-> This is a portfolio project and an educational aid. Model-generated summaries, questions, and verification results can be wrong; check the cited slides before relying on them.
+> This is a portfolio and learning project. AI-generated explanations and verification results can be wrong; check the cited slides before relying on them.
 
-## What it does
+## Overview
 
-- Extracts slide text and renders each PDF page so diagrams and other visual material can be considered.
-- Groups slides into topical sections and generates summaries with slide references.
-- Creates 5, 10, 12, or 15 practice questions from the uploaded deck.
-- Checks each question against its cited slide, attempts a targeted repair for unsupported questions, and checks repaired results again.
-- Lets you browse summaries, questions, verification notes, and cited slide images in the browser.
-- Exports a printable PDF and Markdown study guide together in a ZIP download.
+Students often need to turn a large set of lecture slides into material they can review efficiently. This app automates the first pass: it groups slides into topics, summarizes each section, creates practice questions, checks their claims against cited slides, and exports a PDF study guide.
+
+The app runs on the student's computer. Uploaded PDFs and intermediate files are processed in a temporary local folder. No hosted account or model API key is needed.
+
+## Features
+
+- **Slide understanding:** Extracts PDF text and renders slide images so the vision model can consider diagrams and figures.
+- **Topic-aware sections:** Groups slides using their titles and content.
+- **Section summaries:** Produces concise key points with slide references.
+- **Practice questions:** Creates 5, 10, 12, or 15 questions from usable slide evidence.
+- **Claim-level review:** Checks question and answer claims against their cited slide, then attempts one repair pass for unsupported questions.
+- **Study dashboard:** Browse section summaries, questions, verification notes, and cited slide previews.
+- **Downloads:** Save the printable study guide as a PDF or download a ZIP containing the PDF and Markdown versions.
+- **Local processing:** Uses Ollama on the same computer and does not require a cloud AI key.
 
 ## How it works
 
 ```mermaid
 flowchart TD
-    A[Upload lecture PDF] --> B[Extract text and render slide images]
+    A[Upload lecture PDF] --> B[Extract slide text and render images]
     B --> C[Group slides into sections]
     C --> D[Summarize sections]
     D --> E[Generate practice questions]
-    E --> F[Check questions against cited slides]
-    F -->|Unsupported or partial| G[Attempt targeted repair]
-    G --> H[Check repaired questions again]
-    F -->|Supported| I[Export study guide]
+    E --> F[Verify claims against cited slides]
+    F --> G[Repair unsupported questions]
+    G --> H[Export PDF and Markdown guide]
+    I[Streamlit dashboard] --> A
+    D --> J[Ollama vision model]
+    E --> J
+    F --> J
+    G --> J
     H --> I
-    J[Google Gemini API] <--> D
-    J <--> E
-    J <--> F
-    J <--> G
 ```
 
-The browser app starts an isolated Python worker for each upload. The worker runs the pipeline stages and writes intermediate files to a temporary job directory. It summarizes up to three sections per call, generates the question set in one call, and verifies the full set in one call. Job progress and ownership are tracked in server memory.
+The pipeline handles summaries, questions, and verification sequentially. This limits the amount of slide content sent to the model in each request, but processing a full deck can take several minutes or longer depending on the model and computer.
 
-## Deploy on Render
+## Evaluation
 
-Deploy this project as a Python web service on Render. Each person enters their own Google Gemini API key in the web page when creating a guide; you do not configure a shared Gemini key on the host.
+I evaluate the pipeline by hand to measure question quality, cited-slide support, verifier behavior, and the effect of automatic repair. This is a small, single-rater study; results should be treated as indicative rather than as a benchmark.
 
-### Requirements
+### Setup
 
-- A GitHub repository containing this project.
-- A Render account connected to GitHub.
-- Python 3.10 or later (Render installs Python and the packages from requirements.txt).
+- **Model:** `qwen3-vl:4b-instruct` through Ollama for each stage. Record the actual model and hardware used for each run.
+- **Decks and subjects:** Not reported yet.
+- **Questions:** 12 per deck in the evaluation runner. Record the total number rated.
+- **Rater:** Single rater. The rating sheet shuffles rows and keeps verifier verdicts and question versions in a separate key file to support blind review.
+- **Rubric:** Add the fixed rubric at `eval/RUBRIC.md` before publishing results; this file is not currently in the repository.
+- **Code version and run date:** Record the commit hash and date used for the evaluation.
 
-### Render setup
+### Results
 
-1. In the Render dashboard, select **New > Web Service** and connect the GitHub repository.
-2. Leave **Root Directory** blank and choose the Python runtime.
-3. Set the **Build Command** to:
+Completed ratings and measurements are not present in this repository, so no scores are reported here yet. Fill in the tables after running the evaluation; do not replace these pending values with estimates.
 
-    pip install -r requirements.txt
+**First-pass question quality** (n = pending)
 
-4. Set the **Start Command** to:
+| Metric | Result |
+|---|---:|
+| Relevant | Pending |
+| Trivial | Pending |
+| Wrong | Pending |
+| Cited slide fully supports the answer | Pending |
+| Cited slide partly supports the answer | Pending |
+| Cited slide does not support the answer | Pending |
 
-    python src/web_app.py
+**Verifier compared with human ratings**
 
-5. Choose the **Free** instance for a portfolio demo.
-6. In **Environment**, add HOST with the value 0.0.0.0. Render supplies PORT automatically, and the app reads it. Do not add your personal Gemini API key to Render.
-7. Select **Create Web Service**. When deployment finishes, open the onrender.com address shown in the Render dashboard.
+| Measure | Result |
+|---|---:|
+| Verifier said “yes” when human rated support partial/no (miss rate) | Pending |
+| Human rated support partial/no and verifier did not say “yes” (catch rate) | Pending |
+| Verifier flagged an answer the human rated fully supported (false-alarm rate) | Pending |
 
-Render can redeploy when you push changes to the connected GitHub branch. The free service sleeps after 15 minutes without traffic and can take about a minute to wake. Its filesystem is temporary, so a restart or sleep can interrupt jobs and remove their files. Check [Render's free-service limits](https://render.com/docs/free) and use a small, non-sensitive PDF for the first live test.
+**Effect of repair**
 
-Optional Gemini model settings can be entered in the Render service Environment page:
+| Measure | Result |
+|---|---:|
+| Human support ratings improved / stayed the same / worsened | Pending |
+| Rated trivial before → after repair | Pending |
+| Verifier “yes” after repair vs. human “yes” | Pending |
 
-    GEMINI_MODEL=gemini-3.8-flash
-    GEMINI_THINKING_LEVEL=low
+The last two comparisons are available in the paired rows of `eval/ratings.csv` and `eval/key.csv`, but `eval/compute_results.py` does not currently print them as summary metrics.
 
-The model must be available to the user's Google AI account. Thinking level can be low, medium, or high.
+**Findings:** Add the main measured result after ratings are complete.
 
-## Use the web app
+**Failure cases:** Add a few paraphrased examples, such as a diagram-heavy slide that led to a mistaken label reading, and whether the verifier caught it. Do not include copyrighted slide text.
 
-1. Choose a PDF from your device.
-2. Select 5, 10, 12, or 15 practice questions. Five questions use fewer Gemini requests and are a better fit for limited free-tier quotas.
-3. Enter your Gemini API key for this run.
-4. Start the guide and follow the progress panel.
-5. Open **Current guide** to review summaries, questions, verification notes, and cited slides.
-6. Download the ZIP containing `study_guide.pdf` and `study_guide.md`.
+### Reproduce the evaluation
 
-The current upload limit is 50 MB, and the server accepts up to two active jobs at a time. These limits are intended for a small demo, not high-volume use.
+1. Put 3 to 5 representative lecture PDFs in `eval/decks/`.
+2. Run the full pipeline, which generates 12 questions for each deck:
 
-## Temporary files and privacy
+   ```powershell
+   python eval/run_all.py
+   ```
 
-- The PDF, rendered slide images, intermediate results, and generated guides are stored temporarily on the app server while a job runs.
-- Completed and failed job files are temporary. Completed files are removed after download or after about 29 minutes. Failed runs keep their PDF and intermediate results for up to 29 minutes so you can retry with your API key; completed model responses are reused where possible. A daily quota reset may take longer than this temporary retry window.
-- A server restart clears in-memory job state and can interrupt active jobs or remove results before download.
-- The API key is submitted to the app over HTTPS and passed to the worker process for that run. Do not use a key you are not authorized to use.
-- Slide text and relevant slide images are sent to the Google Gemini API during generation and verification. Review Google's terms and privacy information before uploading sensitive or restricted course material.
-- Application cleanup is not a promise of forensic erasure from operating-system or hosting-provider infrastructure.
+3. Generate the shuffled human-rating sheet:
 
-### Vercel status
+   ```powershell
+   python eval/make_rating_sheet.py
+   ```
 
-The current app is not designed to run directly as Vercel Functions. It depends on a long-running Python worker, temporary local files, and in-memory job tracking. A Vercel deployment would need a separate Python worker, private temporary file storage, and shared job status/queue infrastructure. Vercel Functions also have a 4.5 MB request-body limit, so PDFs would need to upload directly from the browser to storage instead of passing through a function. See [Vercel Function limits](https://vercel.com/docs/functions/limitations) and [Vercel Blob client uploads](https://vercel.com/docs/vercel-blob/client-upload).
+4. Fill in `relevance` (`relevant`, `trivial`, or `wrong`) and `slide_supports` (`yes`, `partial`, or `no`) in `eval/ratings.csv`. Keep `eval/key.csv` closed until ratings are complete.
+5. Calculate question-quality, verifier, and repair summaries:
 
-## Architecture
+   ```powershell
+   python eval/compute_results.py
+   ```
 
-| Component | Responsibility |
-| --- | --- |
-| `src/web_app.py` | Serves the web UI and handles uploads, sessions, job status, slide previews, and downloads. |
-| `src/web_jobs.py` | Starts pipeline workers, tracks job progress, and cleans up temporary workspaces. |
-| `src/pipeline_worker.py` | Runs the processing stages for one uploaded PDF. |
-| `src/extract.py` | Extracts slide text and renders slide images with PyMuPDF. |
-| `src/chunk.py` | Groups slides into sections. |
-| `src/summarize.py` | Generates cited section summaries. |
-| `src/evidence.py` | Scores slide text to help select evidence-rich slides. |
-| `src/questions.py` | Generates a question candidate from a section and slide evidence. |
-| `src/collect_questions.py` | Collects question candidates into the selected set. |
-| `src/verify.py` | Checks question claims against cited slide text and images. |
-| `src/repair_questions.py` | Attempts a targeted repair for unsupported questions. |
-| `src/export.py` | Creates the Markdown and PDF study guides. |
-| `src/models.py` | Defines shared structured-data schemas. |
-| `src/model_provider.py` | Configures and calls the Google Gemini API. |
-| `src/static/index.html` | Contains the browser interface, styles, and client-side behavior. |
+The scripts calculate first-pass quality, verifier misses/catches/false alarms, and paired repair support changes. The PDFs, generated runs, and rating files are local and excluded from Git. Rerunning a deck replaces its previous evaluation output under `data/runs/evaluation/`.
 
-## Limitations
+## Technology
 
-- Verification is model-assisted, not a formal proof. A verifier can miss unsupported claims or approve an incorrect answer.
-- Image quality, small text, complex diagrams, and scanned slides can reduce extraction or verification quality.
-- Gemini availability, request speed, and quotas depend on Google's service and the user's account.
-- The app uses in-memory job tracking and one server process. It is not configured for horizontal scaling or durable background jobs.
-- The public deployment steps are for a low-traffic demo. This repository does not include production-grade identity, rate limiting, or a durable queue.
+- Python
+- Streamlit
+- Ollama
+- Qwen3-VL (vision-language model)
+- PyMuPDF for PDF text extraction and slide rendering
+- Pydantic for structured model output
+
+## Requirements
+
+- Windows, macOS, or Linux
+- Python 3.10 or later
+- [Ollama](https://ollama.com/download) installed and running
+- A vision model available in Ollama
+
+The code defaults to `qwen3-vl:2b`. To use the `qwen3-vl:4b-instruct` model used for this project, download it with:
+
+```powershell
+ollama pull qwen3-vl:4b-instruct
+```
+
+Larger models can produce stronger results but need more memory and may run more slowly. Set `OLLAMA_MODEL` in the same terminal before starting the dashboard.
+
+## Run locally on Windows
+
+Open the project folder in VS Code, then use its PowerShell terminal:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+$env:OLLAMA_MODEL = "qwen3-vl:4b-instruct"
+streamlit run src\streamlit_app.py
+```
+
+Keep Ollama running. Streamlit opens the dashboard at [http://127.0.0.1:8501](http://127.0.0.1:8501). Upload a small PDF and begin with 5 questions to confirm the setup.
+
+If virtual-environment activation is blocked, use the project interpreter directly:
+
+```powershell
+& .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+$env:OLLAMA_MODEL = "qwen3-vl:4b-instruct"
+& .\.venv\Scripts\python.exe -m streamlit run src\streamlit_app.py
+```
+
+### Select another installed Ollama model
+
+The project examples use `qwen3-vl:4b-instruct`. To choose a different installed model, set `OLLAMA_MODEL` in the same terminal before launching Streamlit. For example:
+
+```powershell
+$env:OLLAMA_MODEL = "qwen3-vl:2b"
+streamlit run src\streamlit_app.py
+```
+
+Ollama must have the exact model name installed. Check available models with `ollama list`.
+
+The default Ollama address is `http://127.0.0.1:11434`. Set `OLLAMA_HOST` to use another address. Model requests time out after 600 seconds by default; set `OLLAMA_TIMEOUT_SECONDS` to change that limit.
+
+## Privacy and limitations
+
+- The app does not request or store an AI API key.
+- The PDF, rendered slides, and model requests stay on the local computer when Ollama is running locally.
+- Temporary working copies and intermediate pipeline files are deleted when processing ends. Streamlit may keep the uploaded file buffered in session memory until the session ends. The completed guide and cited slide previews also stay in session memory while the results are open; they are not written to a persistent project folder.
+- Processing speed depends on the model, CPU/GPU, and available memory. Vision models can be slow on computers with limited resources.
+- Verification is model-assisted, not proof. Review the source slides, especially for diagrams and dense technical material.
+- The app is designed for local use. A public host cannot connect to Ollama running on a user's computer without a separate model-serving architecture.
 
 ## Project structure
 
 ```text
 lecture-agent/
-├── .gitignore
+├── .streamlit/
+│   └── config.toml       # Local address and upload-size limit
 ├── README.md
 ├── requirements.txt
 └── src/
-    ├── chunk.py
-    ├── collect_questions.py
-    ├── evidence.py
-    ├── export.py
-    ├── extract.py
-    ├── model_provider.py
-    ├── models.py
+    ├── streamlit_app.py  # Dashboard and temporary upload workflow
     ├── pipeline_worker.py
-    ├── questions.py
-    ├── repair_questions.py
+    ├── extract.py        # Text extraction and slide image rendering
+    ├── chunk.py          # Title-aware slide grouping
     ├── summarize.py
+    ├── questions.py
+    ├── collect_questions.py
     ├── verify.py
-    ├── web_app.py
-    ├── web_jobs.py
-    └── static/
-        └── index.html
+    ├── repair_questions.py
+    ├── export.py
+    ├── model_provider.py # Local Ollama client
+    ├── models.py         # Data schemas
+    └── evidence.py
 ```
-
-## Technology
-
-- Python and the standard-library `ThreadingHTTPServer`
-- PyMuPDF for PDF text extraction, page rendering, and PDF export
-- Google GenAI SDK for Gemini
-- Pydantic for structured model responses
-- HTML, CSS, and vanilla JavaScript
 
 ## License
 
-This repository does not currently include a license file. Unless a license is added, reuse is not granted by the repository's public visibility alone.
+This repository does not currently include a license. Public visibility on GitHub does not by itself grant permission to reuse the code.
