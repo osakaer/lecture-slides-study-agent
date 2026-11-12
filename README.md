@@ -25,19 +25,38 @@ The app runs on the student's computer. Uploaded PDFs and intermediate files are
 
 ```mermaid
 flowchart TD
-    A[Upload lecture PDF] --> B[Extract slide text and render images]
-    B --> C[Group slides into sections]
-    C --> D[Summarize sections]
-    D --> E[Generate practice questions]
-    E --> F[Verify claims against cited slides]
-    F --> G[Repair unsupported questions]
-    G --> H[Export PDF and Markdown guide]
-    I[Streamlit dashboard] --> A
-    D --> J[Ollama vision model]
-    E --> J
-    F --> J
-    G --> J
-    H --> I
+    UI["Streamlit dashboard<br/>upload a PDF, choose 5 / 10 / 12 / 15 questions"]
+
+    subgraph PREP["1. Prepare slides"]
+        A["Extract slide text<br/>and render slide images"] --> B["Group slides into<br/>topic sections"]
+    end
+
+    subgraph GEN["2. Generate"]
+        C["Summarize each section"] --> D["Choose evidence slides<br/>for each question"]
+        D --> E["Generate practice questions<br/>with a cited slide"]
+    end
+
+    subgraph CHECK["3. Check and repair"]
+        F["Verify claims against<br/>the cited slide"] --> G{"All claims<br/>supported?"}
+        G -- "No" --> H["Repair the question<br/>(one attempt)"]
+        H --> I["Re-verify repaired questions"]
+        G -- "Yes" --> J["Flag anything still<br/>not fully supported"]
+        I --> J
+    end
+
+    K["Export Markdown and PDF study guide"]
+    M[("Ollama vision model<br/>runs on your computer")]
+
+    UI --> A
+    B --> C
+    E --> F
+    J --> K
+    K --> UI
+
+    M -.-> C
+    M -.-> E
+    M -.-> F
+    M -.-> H
 ```
 
 The pipeline handles summaries, questions, and verification sequentially. This limits the amount of slide content sent to the model in each request, but processing a full deck can take several minutes or longer depending on the model and computer.
