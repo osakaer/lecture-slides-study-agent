@@ -16,6 +16,7 @@ load_dotenv()
 MODEL = os.getenv("OLLAMA_MODEL", "qwen3-vl:4b-instruct")
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
 OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "600"))
+OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "16384"))
 
 
 def _request_with_progress(request: urllib.request.Request) -> dict:
@@ -86,7 +87,7 @@ def generate_json(
         "model": model or MODEL,
         "messages": [message],
         "format": schema,
-        "options": {"temperature": 0},
+        "options": {"temperature": 0, "num_ctx": OLLAMA_NUM_CTX},
         "stream": False,
     }
     request = urllib.request.Request(
@@ -101,7 +102,17 @@ def generate_json(
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")[:1000]
         raise RuntimeError(f"Ollama API returned HTTP {error.code}: {detail}") from error
-    except (urllib.error.URLError, TimeoutError) as error:
+    except urllib.error.URLError as error:
+        if isinstance(error.reason, TimeoutError):
+            raise RuntimeError(
+                f"The local model did not finish within {OLLAMA_TIMEOUT_SECONDS} seconds. "
+                "Try a smaller deck or fewer questions, and close other GPU-heavy apps."
+            ) from error
+        raise RuntimeError(
+            f"Could not reach Ollama at {OLLAMA_HOST}: {error.reason}. "
+            "Check that Ollama is running."
+        ) from error
+    except TimeoutError as error:
         raise RuntimeError(
             f"The local model did not finish within {OLLAMA_TIMEOUT_SECONDS} seconds. "
             "Try a smaller deck or fewer questions, and close other GPU-heavy apps."
@@ -112,6 +123,19 @@ def generate_json(
     text = result.get("message", {}).get("content")
     if not isinstance(text, str) or not text.strip():
         raise RuntimeError("Ollama returned an empty response.")
+    prompt_tokens = result.get("prompt_eval_count")
+    if isinstance(prompt_tokens, int):
+        print(
+            f"  Ollama processed {prompt_tokens} prompt tokens "
+            f"(configured context: {OLLAMA_NUM_CTX}).",
+            flush=True,
+        )
+        if prompt_tokens >= OLLAMA_NUM_CTX - 64:
+            print(
+                "  Warning: the prompt is near the configured context limit; "
+                "review its output for missing input details.",
+                flush=True,
+            )
     return text
 
 

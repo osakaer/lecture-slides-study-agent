@@ -13,7 +13,7 @@ The app runs on the student's computer. Uploaded PDFs and intermediate files are
 ## Features
 
 - **Slide understanding:** Extracts PDF text and renders slide images so the vision model can consider diagrams and figures.
-- **Topic-aware sections:** Groups slides using their titles and content.
+- **Slide sections:** Groups consecutive slides into sections of about 4–7 slides, splitting at heading-like titles when detected.
 - **Section summaries:** Produces concise key points with slide references.
 - **Practice questions:** Creates 5, 10, 12, or 15 questions from usable slide evidence.
 - **Claim-level review:** Checks question and answer claims against their cited slide, then attempts one repair pass for unsupported questions.
@@ -118,7 +118,7 @@ streamlit run src\streamlit_app.py
 
 Ollama must have the exact model name installed. Check available models with `ollama list`.
 
-The default Ollama address is `http://127.0.0.1:11434`. Set `OLLAMA_HOST` to use another address. Model requests time out after 600 seconds by default; set `OLLAMA_TIMEOUT_SECONDS` to change that limit.
+The default Ollama address is `http://127.0.0.1:11434`. Set `OLLAMA_HOST` to use another address. Model requests time out after 600 seconds by default; set `OLLAMA_TIMEOUT_SECONDS` to change that limit. The context size defaults to 16,384 tokens (`OLLAMA_NUM_CTX`), and slide images render at 110 DPI (`SLIDE_DPI`). These settings affect memory use and run compatibility; if the model returns incomplete content, try a larger context or a smaller deck. The reported prompt token count is a diagnostic, not proof that content was truncated.
 
 ## Privacy and limitations
 
