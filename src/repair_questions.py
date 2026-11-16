@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from pydantic import ValidationError
 from model_provider import MODEL, generate_json
-from models import ExamQuestion
+from models import ExamQuestion, QuestionType
 
 def main(argv: list[str] | None = None) -> None:
     arguments = sys.argv if argv is None else [sys.argv[0], *argv]

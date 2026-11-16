@@ -1,4 +1,4 @@
-"""Mix and blind baseline, first-pass, and repaired evaluation questions."""
+"""Create a blinded human-rating sheet from evaluation run snapshots."""
 
 import csv
 import json
@@ -61,7 +61,6 @@ def main() -> None:
         question_dir = run_dir / "questions"
         first_set = read_json(question_dir / "curated_set.pre_repair.json")
         current_set = read_json(question_dir / "curated_set.json")
-        baseline_set = read_json(run_dir / "baseline" / "questions.json")
         slides = read_json(run_dir / "extracted.json")
         slides_by_number = {slide["slide"]: slide for slide in slides}
         first_verifications = verification_map(question_dir / "verification.pre_repair.json")
@@ -70,30 +69,6 @@ def main() -> None:
             question_key(question): question
             for question in current_set.get("questions", [])
         }
-
-        for baseline_question in baseline_set.get("questions", []):
-            slide_number = baseline_question["source_slide"]
-            slide = slides_by_number.get(slide_number)
-            if slide is None:
-                raise SystemExit(
-                    f"Baseline cited missing slide {slide_number} for {run['deck_name']}."
-                )
-            rating_items.append({
-                "deck_name": run["deck_name"],
-                "source_slide": slide_number,
-                "slide_text": slide["text"],
-                "slide_image": slide["image"],
-                "question": baseline_question["question"],
-                "answer": baseline_question["answer"],
-                "relevance": "",
-                "slide_supports": "",
-            })
-            key_items.append({
-                "pair_id": "",
-                "method": "baseline",
-                "version": "baseline",
-                "verifier_supported": "",
-            })
 
         for first in first_set.get("questions", []):
             key = question_key(first)
@@ -131,7 +106,6 @@ def main() -> None:
                 })
                 key_items.append({
                     "pair_id": pair_id,
-                    "method": "pipeline",
                     "version": version,
                     "verifier_supported": verdicts.get(lookup_key, ""),
                 })
@@ -154,9 +128,7 @@ def main() -> None:
     with KEY_PATH.open("w", newline="", encoding="utf-8-sig") as file:
         writer = csv.DictWriter(
             file,
-            fieldnames=[
-                "rating_id", "pair_id", "method", "version", "verifier_supported"
-            ],
+            fieldnames=["rating_id", "pair_id", "version", "verifier_supported"],
         )
         writer.writeheader()
         writer.writerows(key_items)

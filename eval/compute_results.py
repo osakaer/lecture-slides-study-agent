@@ -1,4 +1,4 @@
-"""Compare baseline and pipeline question ratings and summarize verifier/repair results."""
+"""Summarize human ratings, verifier errors, and paired repair outcomes."""
 
 import csv
 from collections import Counter, defaultdict
@@ -27,25 +27,6 @@ def percent(numerator: int, denominator: int) -> str:
     return f"{numerator}/{denominator} ({numerator / denominator:.1%})"
 
 
-def method_metrics(rows: list[dict]) -> dict:
-    relevant = sum(row["relevance"] == "relevant" for row in rows)
-    supported = sum(row["slide_supports"] == "yes" for row in rows)
-    quality = sum(
-        row["relevance"] == "relevant" and row["slide_supports"] == "yes"
-        for row in rows
-    )
-    return {
-        "n": len(rows),
-        "relevant": relevant,
-        "supported": supported,
-        "quality": quality,
-    }
-
-
-def rate(numerator: int, denominator: int) -> float | None:
-    return numerator / denominator if denominator else None
-
-
 def main() -> None:
     ratings = load_csv(RATINGS_PATH)
     key = load_csv(KEY_PATH)
@@ -63,30 +44,19 @@ def main() -> None:
                 f"Complete valid relevance and slide_supports labels for {rating_id}: "
                 "relevance must be relevant/trivial/wrong; slide_supports must be yes/partial/no."
             )
-        joined.append({
-            **row,
-            **key[rating_id],
-            "method": key[rating_id].get("method") or "pipeline",
-            "relevance": relevance,
-            "slide_supports": support,
-        })
+        joined.append({**row, **key[rating_id], "relevance": relevance, "slide_supports": support})
 
-    baseline = [row for row in joined if row["method"] == "baseline"]
-    first_pass = [
-        row for row in joined
-        if row["method"] == "pipeline" and row.get("version") == "first_pass"
-    ]
-    repaired = [
-        row for row in joined
-        if row["method"] == "pipeline" and row.get("version") == "repaired"
-    ]
+    first_pass = [row for row in joined if row.get("version") == "first_pass"]
+    repaired = [row for row in joined if row.get("version") == "repaired"]
     if not first_pass:
         raise SystemExit("No first-pass ratings were found in key.csv.")
-    if not baseline:
-        raise SystemExit(
-            "No baseline ratings were found. Rerun eval/run_all.py and "
-            "eval/make_rating_sheet.py to include the one-prompt baseline."
-        )
+
+    relevance_counts = Counter(row["relevance"] for row in first_pass)
+    support_counts = Counter(row["slide_supports"] for row in first_pass)
+    acceptable_first_pass = sum(
+        row["relevance"] == "relevant" and row["slide_supports"] == "yes"
+        for row in first_pass
+    )
 
     audited = [
         row for row in first_pass
@@ -100,9 +70,7 @@ def main() -> None:
 
     by_pair: dict[str, dict[str, dict[str, str]]] = defaultdict(dict)
     for row in joined:
-        pair_id = row.get("pair_id", "")
-        if pair_id:
-            by_pair[pair_id][row["version"]] = row
+        by_pair[row["pair_id"]][row["version"]] = row
     comparable = [
         pair for pair in by_pair.values()
         if "first_pass" in pair and "repaired" in pair
@@ -114,51 +82,15 @@ def main() -> None:
         effects["improved" if after > before else "worse" if after < before else "same"] += 1
     repaired_trivial = sum(row["relevance"] == "trivial" for row in repaired)
 
-    print("Question quality by method")
-    method_rows = [
-        ("Naive single-prompt baseline", baseline),
-        ("Pipeline first pass", first_pass),
-        ("Pipeline after repair", repaired),
-    ]
-    for label, rows in method_rows:
-        if not rows:
-            print(f"  {label}: no changed questions to rate")
-            continue
-        metrics = method_metrics(rows)
-        print(
-            f"  {label} (n={metrics['n']}): relevant "
-            f"{percent(metrics['relevant'], metrics['n'])}; fully supported "
-            f"{percent(metrics['supported'], metrics['n'])}; relevant and fully "
-            f"supported {percent(metrics['quality'], metrics['n'])}"
-        )
-
-    baseline_rate = rate(method_metrics(baseline)["quality"], len(baseline))
-    pipeline_rate = rate(method_metrics(first_pass)["quality"], len(first_pass))
-    if baseline_rate is not None and pipeline_rate is not None:
-        delta = (pipeline_rate - baseline_rate) * 100
-        print(f"  Pipeline first-pass quality change vs baseline: {delta:+.1f} percentage points")
-
-    print("\nPrimary metric by deck (relevant and fully supported)")
-    deck_names = sorted({row["deck_name"] for row in baseline + first_pass})
-    for deck_name in deck_names:
-        baseline_deck = [row for row in baseline if row["deck_name"] == deck_name]
-        pipeline_deck = [row for row in first_pass if row["deck_name"] == deck_name]
-        baseline_metrics = method_metrics(baseline_deck)
-        pipeline_metrics = method_metrics(pipeline_deck)
-        baseline_percent = percent(baseline_metrics["quality"], baseline_metrics["n"])
-        pipeline_percent = percent(pipeline_metrics["quality"], pipeline_metrics["n"])
-        if baseline_metrics["n"] and pipeline_metrics["n"]:
-            change = (
-                rate(pipeline_metrics["quality"], pipeline_metrics["n"])
-                - rate(baseline_metrics["quality"], baseline_metrics["n"])
-            ) * 100
-            delta_text = f"{change:+.1f} pp"
-        else:
-            delta_text = "n/a"
-        print(
-            f"  {deck_name}: baseline {baseline_percent}; "
-            f"pipeline {pipeline_percent}; change {delta_text}"
-        )
+    print("First-pass question quality")
+    for label in ("relevant", "trivial", "wrong"):
+        print(f"  Relevance {label}: {percent(relevance_counts[label], len(first_pass))}")
+    for label in ("yes", "partial", "no"):
+        print(f"  Slide support {label}: {percent(support_counts[label], len(first_pass))}")
+    print(
+        "  Relevant and fully supported: "
+        f"{percent(acceptable_first_pass, len(first_pass))}"
+    )
 
     print("\nVerifier performance against human first-pass ratings")
     print(f"  Questions with verifier verdicts: {len(audited)}/{len(first_pass)}")
@@ -171,6 +103,7 @@ def main() -> None:
     for label in ("improved", "same", "worse"):
         print(f"  Support {label}: {effects[label]}")
     print(f"  Repaired versions rated trivial: {percent(repaired_trivial, len(repaired))}")
+    print("\nThis compares first-pass generation with the post-verification/repair output; it is not a naive-prompt baseline.")
 
 
 if __name__ == "__main__":

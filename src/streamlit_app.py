@@ -79,36 +79,22 @@ def run_pipeline(uploaded_pdf, question_count: int) -> None:
                 bufsize=1,
             )
             assert process.stdout is not None
-            try:
-                for line in process.stdout:
-                    line = line.rstrip()
-                    if line:
-                        log_lines.append(line)
-                        if line.startswith("=== "):
-                            progress.update(label=line.strip("= "))
-                        if (
-                            line.startswith("=== ")
-                            or line.startswith("  Local model is still generating")
-                            or len(log_lines) % 8 == 0
-                        ):
-                            log_view.code("\n".join(log_lines[-24:]), language="text")
-                return_code = process.wait()
-                if log_lines:
-                    log_view.code("\n".join(log_lines[-40:]), language="text")
-            finally:
-                if process.poll() is None:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait()
+            for line in process.stdout:
+                line = line.rstrip()
+                if line:
+                    log_lines.append(line)
+                    if line.startswith("=== "):
+                        progress.update(label=line.strip("= "))
+                    if (
+                        line.startswith("=== ")
+                        or line.startswith("  Local model is still generating")
+                        or len(log_lines) % 8 == 0
+                    ):
+                        log_view.code("\n".join(log_lines[-24:]), language="text")
+            return_code = process.wait()
             if return_code != 0:
                 progress.update(label="Guide creation failed", state="error")
-                st.error(
-                    f"The pipeline stopped with exit code {return_code}. "
-                    "Check the final log lines above for the failing step."
-                )
+                st.error("The pipeline stopped. Check the output above for the failing step.")
                 return
 
             slides = load_result(run_dir, "extracted.json")
@@ -252,11 +238,10 @@ def main() -> None:
             type=["pdf"],
             help="Maximum file size: 50 MB.",
         )
-        question_count = st.segmented_control(
+        question_count = st.select_slider(
             "Number of practice questions",
             options=QUESTION_OPTIONS,
-            default=5,
-            format_func=lambda count: f"{count} questions",
+            value=5,
         )
         submitted = st.form_submit_button("Create my study guide", type="primary")
 
