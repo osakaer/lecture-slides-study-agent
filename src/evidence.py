@@ -21,8 +21,8 @@ def evidence_score(text: str) -> int:
 
     if not useful_lines:
         return -1
-    if re.match(
-        r"^(outline|agenda|contents|table of contents|references|thank you|questions?)(?:\b|\?)",
+    if re.fullmatch(
+        r"(?:outline|agenda|contents|table of contents|references|thank you|questions?)[.!?]?",
         useful_lines[0],
         re.I,
     ):

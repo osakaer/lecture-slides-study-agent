@@ -1,9 +1,12 @@
 from collections import Counter
 import json
+import os
 import sys
 from pathlib import Path
 
 import pymupdf
+
+SLIDE_DPI = int(os.getenv("SLIDE_DPI", "110"))
 
 
 def strip_repeated_lines(
@@ -53,7 +56,7 @@ def main(argv: list[str] | None = None) -> None:
             text = page.get_text("text").strip()
             image_path = image_dir / f"slide_{page_number:03}.png"
 
-            page.get_pixmap(dpi=150).save(image_path)
+            page.get_pixmap(dpi=SLIDE_DPI).save(image_path)
 
             slides.append({
                 "slide": page_number,

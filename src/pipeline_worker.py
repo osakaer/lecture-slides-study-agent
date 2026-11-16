@@ -1,14 +1,18 @@
 """Run the study-guide pipeline for one uploaded PDF."""
 
 import argparse
+import hashlib
 import importlib
 import json
 import os
+import subprocess
 import shutil
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from evidence import evidence_score
+from model_provider import MODEL, OLLAMA_NUM_CTX, ensure_model_ready
 
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
@@ -63,6 +67,46 @@ def run_step(label: str, *args: str) -> None:
         os.chdir(previous_directory)
 
 
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for block in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def current_commit() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=PROJECT_DIR,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    return result.stdout.strip() or "unknown"
+
+
+def code_fingerprint() -> str:
+    digest = hashlib.sha256()
+    sources = sorted((PROJECT_DIR / "src").glob("*.py"))
+    sources.extend(
+        path
+        for path in (
+            PROJECT_DIR / "eval" / "run_all.py",
+            PROJECT_DIR / "eval" / "generate_baseline.py",
+        )
+        if path.is_file()
+    )
+    for source in sources:
+        digest.update(source.relative_to(PROJECT_DIR).as_posix().encode("utf-8"))
+        digest.update(source.read_bytes())
+    return digest.hexdigest()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build a study guide for one uploaded PDF.")
     parser.add_argument("pdf", help="Uploaded PDF path")
@@ -77,11 +121,33 @@ def main(argv: list[str] | None = None) -> int:
     if not pdf_path.is_file() or pdf_path.suffix.lower() != ".pdf":
         raise SystemExit(f"PDF not found or not a PDF file: {pdf_path}")
 
+    try:
+        ensure_model_ready()
+    except RuntimeError as error:
+        raise SystemExit(str(error)) from error
+
     run_dir = Path(args.run_dir)
     if not run_dir.is_absolute():
         run_dir = PROJECT_DIR / run_dir
     run_dir = run_dir.resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
+    run_info = {
+        "pdf_name": pdf_path.name,
+        "pdf_sha256": file_sha256(pdf_path),
+        "generator_model": MODEL,
+        "verifier_model": os.getenv("VERIFIER_MODEL", "").strip() or MODEL,
+        "questions": args.questions,
+        "baseline_prompt_version": os.getenv("BASELINE_PROMPT_VERSION", "baseline-v1"),
+        "baseline_input_mode": "extracted_text_only",
+        "num_ctx": OLLAMA_NUM_CTX,
+        "slide_dpi": int(os.getenv("SLIDE_DPI", "110")),
+        "commit": current_commit(),
+        "code_fingerprint": code_fingerprint(),
+        "started_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    (run_dir / "run_info.json").write_text(
+        json.dumps(run_info, indent=2) + "\n", encoding="utf-8"
+    )
     run_dir_arg = str(run_dir)
 
     run_step("Extract slides and render images", "src/extract.py", str(pdf_path), run_dir_arg)

@@ -13,7 +13,7 @@ The app runs on the student's computer. Uploaded PDFs and intermediate files are
 ## Features
 
 - **Slide understanding:** Extracts PDF text and renders slide images so the vision model can consider diagrams and figures.
-- **Topic-aware sections:** Groups slides using their titles and content.
+- **Slide sections:** Groups consecutive slides into sections of about 4–7 slides, splitting at heading-like titles when detected.
 - **Section summaries:** Produces concise key points with slide references.
 - **Practice questions:** Creates 5, 10, 12, or 15 questions from usable slide evidence.
 - **Claim-level review:** Checks question and answer claims against their cited slide, then attempts one repair pass for unsupported questions.
@@ -63,16 +63,17 @@ The pipeline handles summaries, questions, and verification sequentially. This l
 
 ## Evaluation
 
-I evaluate the pipeline by hand to measure question quality, cited-slide support, verifier behavior, and the effect of automatic repair. This is a small, single-rater study; results should be treated as indicative rather than as a benchmark.
+I evaluate the pipeline by hand to measure question quality, cited-slide support, verifier behavior, and the effect of automatic repair. I also compare the pipeline's first-pass questions with a naive one-prompt baseline. This is a small, single-rater study; results should be treated as indicative rather than as a benchmark.
 
 ### Setup
 
-- **Model:** `qwen3-vl:4b-instruct` through Ollama for each stage. Record the actual model and hardware used for each run.
+- **Model:** `qwen3-vl:4b-instruct` through Ollama for each stage. Pipeline run metadata is in `run_info.json`; baseline model, context, PDF/text hashes, prompt version, and code version are in `baseline/run_info.json`.
 - **Decks and subjects:** Not reported yet.
-- **Questions:** 12 per deck in the evaluation runner. Record the total number rated.
-- **Rater:** Single rater. The rating sheet shuffles rows and keeps verifier verdicts and question versions in a separate key file to support blind review.
+- **Questions:** 12 per deck and method. Record the total number rated.
+- **Baseline:** One model call receives the extracted text of the complete deck and generates all questions. It does not use sections, evidence selection, verification, or repair. The baseline is text-only while the pipeline can use slide images, so the result compares the full systems and does not isolate the effect of one pipeline stage. The full text must fit the Ollama context; the baseline does not silently truncate it.
+- **Rater:** Single rater. The rating sheet mixes and shuffles baseline, first-pass, and repaired questions; method labels and verifier verdicts stay in a separate key file to support blind review.
 - **Rubric:** Add the fixed rubric at `eval/RUBRIC.md` before publishing results; this file is not currently in the repository.
-- **Code version and run date:** Record the commit hash and date used for the evaluation.
+- **Code version and run date:** Use the commit and UTC start time in each pipeline run's `run_info.json`; baseline prompt version and code fingerprint are in `baseline/run_info.json`.
 
 ### Results
 
@@ -88,6 +89,14 @@ Completed ratings and measurements are not present in this repository, so no sco
 | Cited slide fully supports the answer | Pending |
 | Cited slide partly supports the answer | Pending |
 | Cited slide does not support the answer | Pending |
+
+**Naive baseline versus pipeline**
+
+| Method | Relevant and fully supported | n |
+|---|---:|---:|
+| One-prompt baseline | Pending | Pending |
+| Pipeline first pass | Pending | Pending |
+| Difference (pipeline − baseline) | Pending percentage points | — |
 
 **Verifier compared with human ratings**
 
@@ -114,11 +123,19 @@ The last two comparisons are available in the paired rows of `eval/ratings.csv` 
 ### Reproduce the evaluation
 
 1. Put 3 to 5 representative lecture PDFs in `eval/decks/`.
-2. Run the full pipeline, which generates 12 questions for each deck:
+2. Run the pipeline and generate a one-prompt baseline of 12 questions for each deck. The baseline uses the same local model and all extracted slide text in one call. Existing results resume only when the PDF, model settings, and pipeline code match. If there is no matching run metadata, that deck's generated run folder is replaced automatically:
 
    ```powershell
    python eval/run_all.py
    ```
+
+   To intentionally delete all existing evaluation run folders and regenerate every deck:
+
+   ```powershell
+   python eval/run_all.py --fresh
+   ```
+
+   The evaluation runner checks that Ollama and the configured model are available before changing existing runs. It continues to the remaining decks if one run fails and records each deck's status in `eval/run_manifest.json`.
 
 3. Generate the shuffled human-rating sheet:
 
@@ -133,7 +150,7 @@ The last two comparisons are available in the paired rows of `eval/ratings.csv` 
    python eval/compute_results.py
    ```
 
-The scripts calculate first-pass quality, verifier misses/catches/false alarms, and paired repair support changes. The PDFs, generated runs, and rating files are local and excluded from Git. Rerunning a deck replaces its previous evaluation output under `data/runs/evaluation/`.
+The scripts calculate baseline-versus-pipeline quality, verifier misses/catches/false alarms, and paired repair support changes. The primary comparison is the share of questions rated both relevant and fully supported by their cited slide. The baseline is text-only while the pipeline can use images, so interpret this as a comparison of the complete systems. The PDFs, generated runs, and rating files are local and excluded from Git. Evaluation outputs are stored under `data/runs/evaluation/`; compatible runs resume by default. Use `--fresh` to explicitly delete and regenerate them.
 
 ## Technology
 
@@ -151,7 +168,7 @@ The scripts calculate first-pass quality, verifier misses/catches/false alarms, 
 - [Ollama](https://ollama.com/download) installed and running
 - A vision model available in Ollama
 
-The code defaults to `qwen3-vl:2b`. To use the `qwen3-vl:4b-instruct` model used for this project, download it with:
+The code defaults to `qwen3-vl:4b-instruct`. Download it with:
 
 ```powershell
 ollama pull qwen3-vl:4b-instruct
@@ -192,7 +209,7 @@ streamlit run src\streamlit_app.py
 
 Ollama must have the exact model name installed. Check available models with `ollama list`.
 
-The default Ollama address is `http://127.0.0.1:11434`. Set `OLLAMA_HOST` to use another address. Model requests time out after 600 seconds by default; set `OLLAMA_TIMEOUT_SECONDS` to change that limit.
+The default Ollama address is `http://127.0.0.1:11434`. Set `OLLAMA_HOST` to use another address. Model requests time out after 600 seconds by default; set `OLLAMA_TIMEOUT_SECONDS` to change that limit. The context size defaults to 16,384 tokens (`OLLAMA_NUM_CTX`), and slide images render at 110 DPI (`SLIDE_DPI`). These settings affect memory use and run compatibility; if the model returns incomplete content, try a larger context or a smaller deck. The reported prompt token count is a diagnostic, not proof that content was truncated.
 
 ## Privacy and limitations
 
