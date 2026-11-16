@@ -1,158 +1,142 @@
 # Lecture Slides Study Agent
 
-A local study-guide generator that turns lecture-slide PDFs into topic summaries, practice questions, and a printable guide. It uses a Streamlit dashboard and a vision-capable Ollama model to read both slide text and visual content.
+A local AI study tool that turns lecture PDFs into slide-cited summaries, practice questions, and a downloadable study guide. It uses a Streamlit interface and a vision-language model served by Ollama, so it can analyze slide text, images, and diagrams without a hosted AI API.
 
-> This is a portfolio and learning project. AI-generated explanations and verification results can be wrong; check the cited slides before relying on them.
+> This is a portfolio project. Model-generated content and verification can be wrong; check the cited slides before relying on the guide.
 
-## Overview
+## What it does
 
-Students often need to turn a large set of lecture slides into material they can review efficiently. This app automates the first pass: it groups slides into topics, summarizes each section, creates practice questions, checks their claims against cited slides, and exports a PDF study guide.
-
-The app runs on the student's computer. Uploaded PDFs and intermediate files are processed in a temporary local folder. No hosted account or model API key is needed.
-
-## Features
-
-- **Slide understanding:** Extracts PDF text and renders slide images so the vision model can consider diagrams and figures.
-- **Slide sections:** Groups consecutive slides into sections of about 4–7 slides, splitting at heading-like titles when detected.
-- **Section summaries:** Produces concise key points with slide references.
-- **Practice questions:** Creates 5, 10, 12, or 15 questions from usable slide evidence.
-- **Claim-level review:** Checks question and answer claims against their cited slide, then attempts one repair pass for unsupported questions.
-- **Study dashboard:** Browse section summaries, questions, verification notes, and cited slide previews.
-- **Downloads:** Save the printable study guide as a PDF or download a ZIP containing the PDF and Markdown versions.
-- **Local processing:** Uses Ollama on the same computer and does not require a cloud AI key.
+- Extracts text from PDF slides and renders page images for visual analysis.
+- Groups consecutive slides into topic sections, typically 4–7 slides, using heading cues.
+- Summarizes each section with slide references.
+- Generates 5, 10, 12, or 15 practice questions from selected slide evidence.
+- Checks question and answer claims against cited slides, attempts one repair for unsupported claims, and rechecks the result.
+- Displays summaries, questions, cited slide previews, and verification notes in a Streamlit dashboard.
+- Exports a PDF study guide and a ZIP containing PDF and Markdown versions.
 
 ## How it works
 
 ```mermaid
 flowchart TD
-    UI["Streamlit dashboard<br/>upload a PDF, choose 5 / 10 / 12 / 15 questions"]
+    UI["Streamlit dashboard<br/>Upload PDF and choose question count"]
+    A["Extract slide text<br/>Render page images"]
+    B["Group slides into<br/>topic sections"]
+    C["Summarize each section"]
+    D["Select slide evidence<br/>for questions"]
+    E["Generate questions<br/>with slide citations"]
+    F["Check answer claims<br/>against cited slides"]
+    G{"All claims<br/>supported?"}
+    H["Attempt one repair"]
+    I["Recheck repaired<br/>questions"]
+    J["Prepare study guide"]
+    K["Export PDF and Markdown"]
+    M[("Local Ollama<br/>vision-language model")]
 
-    subgraph PREP["1. Prepare slides"]
-        A["Extract slide text<br/>and render slide images"] --> B["Group slides into<br/>topic sections"]
-    end
-
-    subgraph GEN["2. Generate"]
-        C["Summarize each section"] --> D["Choose evidence slides<br/>for each question"]
-        D --> E["Generate practice questions<br/>with a cited slide"]
-    end
-
-    subgraph CHECK["3. Check and repair"]
-        F["Verify claims against<br/>the cited slide"] --> G{"All claims<br/>supported?"}
-        G -- "No" --> H["Repair the question<br/>(one attempt)"]
-        H --> I["Re-verify repaired questions"]
-        G -- "Yes" --> J["Flag anything still<br/>not fully supported"]
-        I --> J
-    end
-
-    K["Export Markdown and PDF study guide"]
-    M[("Ollama vision model<br/>runs on your computer")]
-
-    UI --> A
-    B --> C
-    E --> F
-    J --> K
-    K --> UI
-
+    UI --> A --> B --> C --> D --> E --> F --> G
+    G -- "Yes" --> J
+    G -- "No" --> H --> I --> J
+    J --> K --> UI
     M -.-> C
     M -.-> E
     M -.-> F
     M -.-> H
 ```
 
-The pipeline handles summaries, questions, and verification sequentially. This limits the amount of slide content sent to the model in each request, but processing a full deck can take several minutes or longer depending on the model and computer.
+The pipeline processes sections and questions sequentially. Processing time depends on deck size, model, and hardware; a full deck can take several minutes or longer.
 
 ## Technology
 
-- Python
-- Streamlit
-- Ollama
-- Qwen3-VL (vision-language model)
-- PyMuPDF for PDF text extraction and slide rendering
-- Pydantic for structured model output
+- Python and Streamlit
+- Ollama with Qwen3-VL 4B Instruct
+- PyMuPDF for PDF text extraction and page rendering
+- Pydantic for structured model outputs
 
 ## Requirements
 
-- Windows, macOS, or Linux
 - Python 3.10 or later
-- [Ollama](https://ollama.com/download) installed and running
-- A vision model available in Ollama
-
-The code defaults to `qwen3-vl:4b-instruct`. Download it with:
-
-```powershell
-ollama pull qwen3-vl:4b-instruct
-```
-
-Larger models can produce stronger results but need more memory and may run more slowly. Set `OLLAMA_MODEL` in the same terminal before starting the dashboard.
+- [Ollama](https://ollama.com/download), running locally
+- The `qwen3-vl:4b-instruct` model, or another compatible vision model
 
 ## Run locally on Windows
 
-Open the project folder in VS Code, then use its PowerShell terminal:
+Clone the repository and open its folder in VS Code:
 
 ```powershell
+git clone https://github.com/osakaer/lecture-slides-study-agent.git
+cd lecture-slides-study-agent
+```
+
+Install the model and Python dependencies, then start the dashboard:
+
+```powershell
+ollama pull qwen3-vl:4b-instruct
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-$env:OLLAMA_MODEL = "qwen3-vl:4b-instruct"
 streamlit run src\streamlit_app.py
 ```
 
-Keep Ollama running. Streamlit opens the dashboard at [http://127.0.0.1:8501](http://127.0.0.1:8501). Upload a small PDF and begin with 5 questions to confirm the setup.
+Keep Ollama running. Open [http://127.0.0.1:8501](http://127.0.0.1:8501), upload a PDF, and start with five questions.
 
-If virtual-environment activation is blocked, use the project interpreter directly:
+If PowerShell blocks virtual-environment activation, use the project interpreter directly:
 
 ```powershell
-& .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-$env:OLLAMA_MODEL = "qwen3-vl:4b-instruct"
-& .\.venv\Scripts\python.exe -m streamlit run src\streamlit_app.py
+ollama pull qwen3-vl:4b-instruct
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m streamlit run src\streamlit_app.py
 ```
 
-### Select another installed Ollama model
+## Model settings
 
-The project examples use `qwen3-vl:4b-instruct`. To choose a different installed model, set `OLLAMA_MODEL` in the same terminal before launching Streamlit. For example:
+The default model is `qwen3-vl:4b-instruct`. Set an environment variable in the same terminal before starting Streamlit to use a different model already installed in Ollama:
 
 ```powershell
 $env:OLLAMA_MODEL = "qwen3-vl:2b"
 streamlit run src\streamlit_app.py
 ```
 
-Ollama must have the exact model name installed. Check available models with `ollama list`.
+| Setting | Default | Purpose |
+|---|---:|---|
+| `OLLAMA_MODEL` | `qwen3-vl:4b-instruct` | Ollama model used for generation and verification |
+| `OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama server address |
+| `OLLAMA_TIMEOUT_SECONDS` | `600` | Model request timeout |
+| `OLLAMA_NUM_CTX` | `16384` | Context window requested from Ollama |
+| `SLIDE_DPI` | `110` | Resolution used to render PDF pages |
 
-The default Ollama address is `http://127.0.0.1:11434`. Set `OLLAMA_HOST` to use another address. Model requests time out after 600 seconds by default; set `OLLAMA_TIMEOUT_SECONDS` to change that limit. The context size defaults to 16,384 tokens (`OLLAMA_NUM_CTX`), and slide images render at 110 DPI (`SLIDE_DPI`). These settings affect memory use and run compatibility; if the model returns incomplete content, try a larger context or a smaller deck. The reported prompt token count is a diagnostic, not proof that content was truncated.
+The app reports prompt-token usage and warns when a request is close to the configured context limit. This is a diagnostic and cannot prove that the model used every part of the input.
 
 ## Privacy and limitations
 
-- The app does not request or store an AI API key.
-- The PDF, rendered slides, and model requests stay on the local computer when Ollama is running locally.
-- Temporary working copies and intermediate pipeline files are deleted when processing ends. Streamlit may keep the uploaded file buffered in session memory until the session ends. The completed guide and cited slide previews also stay in session memory while the results are open; they are not written to a persistent project folder.
-- Processing speed depends on the model, CPU/GPU, and available memory. Vision models can be slow on computers with limited resources.
-- Verification is model-assisted, not proof. Review the source slides, especially for diagrams and dense technical material.
-- The app is designed for local use. A public host cannot connect to Ollama running on a user's computer without a separate model-serving architecture.
+- PDFs and intermediate files are processed in a temporary folder on the same computer and removed when processing ends. The uploaded file and completed guide remain in Streamlit session memory while the results are open.
+- With Ollama running locally, slide content stays on the local computer. If `OLLAMA_HOST` points to another machine or service, that server receives the model requests.
+- This app is designed for local use; a public host cannot access Ollama running on each visitor's computer without a separate model-serving setup.
+- The verifier is another model call, not independent proof. Check the source slides, especially for diagrams and dense technical material.
+- Performance depends on available memory and CPU/GPU. Vision models can be slow on modest hardware.
+- The repository does not publish benchmark results for question quality or verification accuracy.
 
 ## Project structure
 
 ```text
-lecture-agent/
-├── .streamlit/
-│   └── config.toml       # Local address and upload-size limit
-├── README.md
+lecture-slides-study-agent/
+├── .streamlit/config.toml  # Local server address and upload-size limit
+├── src/
+│   ├── streamlit_app.py    # User interface, temporary uploads, and downloads
+│   ├── pipeline_worker.py  # Coordinates the processing stages
+│   ├── extract.py          # Extracts text and renders slide images
+│   ├── chunk.py            # Groups slides into sections
+│   ├── summarize.py        # Creates cited section summaries
+│   ├── questions.py        # Generates slide-grounded questions
+│   ├── evidence.py         # Scores slides for question evidence
+│   ├── verify.py           # Checks claims against cited slide images
+│   ├── repair_questions.py # Attempts one repair for unsupported questions
+│   ├── collect_questions.py
+│   ├── export.py           # Produces Markdown and PDF guides
+│   ├── model_provider.py   # Ollama requests and model readiness checks
+│   └── models.py           # Pydantic data schemas
 ├── requirements.txt
-└── src/
-    ├── streamlit_app.py  # Dashboard and temporary upload workflow
-    ├── pipeline_worker.py
-    ├── extract.py        # Text extraction and slide image rendering
-    ├── chunk.py          # Title-aware slide grouping
-    ├── summarize.py
-    ├── questions.py
-    ├── collect_questions.py
-    ├── verify.py
-    ├── repair_questions.py
-    ├── export.py
-    ├── model_provider.py # Local Ollama client
-    ├── models.py         # Data schemas
-    └── evidence.py
+└── README.md
 ```
 
 ## License
 
-This repository does not currently include a license. Public visibility on GitHub does not by itself grant permission to reuse the code.
+No license is currently included. Public visibility on GitHub does not by itself grant permission to reuse this code.
